@@ -2578,9 +2578,8 @@ pub struct App {
     pub metrics_provider: Option<crate::providers::MetricsProvider>,
     /// Compiled custom views from config, re-resolved on context switch.
     pub user_views: HashMap<String, crate::views::View>,
-    /// The named layout chosen per kind (by title) this session, with the
-    /// kind's resource so `:reload` can check it still exists.
-    layouts: HashMap<String, (ApiResource, String)>,
+    /// The named layout chosen per kind (by title) this session.
+    layouts: HashMap<String, String>,
     /// Compiled warning/critical coloring thresholds from config, re-resolved
     /// on context switch and `:reload`.
     pub thresholds: crate::thresholds::Compiled,

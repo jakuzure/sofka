@@ -979,7 +979,6 @@ impl App {
         plugin_warnings.extend(crate::config::logs_warnings(&self.logs_cfg));
         let (views, view_warnings) = crate::views::compile(&resolved.config.views);
         self.user_views = views;
-        self.prune_layouts();
         let (thresholds, threshold_warnings) =
             crate::thresholds::compile(&resolved.config.thresholds);
         self.thresholds = thresholds;
@@ -1017,6 +1016,7 @@ impl App {
             &cluster.default_namespace,
         );
         self.cluster = *cluster;
+        self.prune_layouts();
         plugin_warnings.extend(self.configure_keys(&resolved.config.keys));
         self.stack.clear();
         // View history references the old cluster's kinds and namespaces.

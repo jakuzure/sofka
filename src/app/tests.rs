@@ -41348,3 +41348,57 @@ async fn reload_keeps_an_existing_layout_and_drops_a_removed_one() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn palette_lists_a_layout_for_a_group_qualified_kind_sharing_a_plural() {
+    let (mut app, _rx) = test_app();
+    app.cluster
+        .register_kind("metrics.k8s.io", "PodMetrics", "pods", true);
+    app.cluster.register_kind("", "Pod", "pods", true);
+    install_views(
+        &mut app,
+        "[views.\"metrics.k8s.io/v1/pods:usage\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for c in "usage".chars() {
+        app.handle_key(press(KeyCode::Char(c))).unwrap();
+    }
+    assert_eq!(
+        suggestion_labels(&app).first().map(String::as_str),
+        Some("pods.metrics.k8s.io:usage")
+    );
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        app.kind.as_ref().map(|k| k.ar.group.as_str()),
+        Some("metrics.k8s.io")
+    );
+    assert_eq!(app.active_layout(), Some("usage"));
+}
+
+#[tokio::test]
+async fn context_switch_keeps_a_layout_the_destination_version_defines() {
+    let dir = std::env::temp_dir().join(format!("sofka-layout-ctx-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_config(
+        &dir,
+        "[views.\"example.com/v2/widgets:slim\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    let (mut app, _rx) = test_app();
+    app.config = crate::config::ConfigLoader::from_dir(Some(dir.clone()));
+    app.cluster
+        .register_kind("example.com", "Widget", "widgets", true);
+    install_views(
+        &mut app,
+        "[views.\"example.com/v1/widgets:slim\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    type_resource_query(&mut app, "widgets -o slim");
+    assert_eq!(app.active_layout(), Some("slim"));
+
+    let mut cluster = Cluster::fake();
+    cluster.register_kind_version("example.com", "v2", "Widget", "widgets", true);
+    app.apply_context_switch("prod".into(), Box::new(cluster));
+    assert_eq!(app.kind_plural, "widgets");
+    assert_eq!(app.kind.as_ref().map(|k| k.ar.version.as_str()), Some("v2"));
+    assert_eq!(app.active_layout(), Some("slim"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

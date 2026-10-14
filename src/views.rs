@@ -232,7 +232,7 @@ pub const RESERVED_LAYOUTS: &[&str] = &["default", "wide"];
 
 fn valid_layout_name(name: &str) -> bool {
     !name.is_empty()
-        && !RESERVED_LAYOUTS.contains(&name)
+        && !RESERVED_LAYOUTS.contains(&name.to_lowercase().as_str())
         && !name.contains(|c: char| c.is_whitespace() || matches!(c, '@' | ':'))
 }
 
@@ -1979,6 +1979,10 @@ mod tests {
             columns = [{ name = "X", path = "/x" }]
             [views."pods:a:b"]
             columns = [{ name = "X", path = "/x" }]
+            [views."pods:Default"]
+            columns = [{ name = "X", path = "/x" }]
+            [views."pods:WIDE"]
+            columns = [{ name = "X", path = "/x" }]
             "#,
         );
         let view = &views["pods:images"];
@@ -1996,7 +2000,15 @@ mod tests {
             );
         }
         assert!(views.contains_key("pods:images@matlab"));
-        for key in ["pods:default", "pods:wide", "pods:", "pods:a b", "pods:a:b"] {
+        for key in [
+            "pods:default",
+            "pods:wide",
+            "pods:",
+            "pods:a b",
+            "pods:a:b",
+            "pods:Default",
+            "pods:WIDE",
+        ] {
             assert!(!views.contains_key(key), "{key}");
             assert!(
                 warnings
@@ -2005,7 +2017,7 @@ mod tests {
                 "{key}: {warnings:?}"
             );
         }
-        assert_eq!(warnings.len(), 8, "{warnings:?}");
+        assert_eq!(warnings.len(), 10, "{warnings:?}");
     }
 
     #[test]
