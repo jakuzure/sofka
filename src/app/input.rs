@@ -659,7 +659,8 @@ impl App {
 
     /// Run the highlighted palette suggestion (or the raw typed text).
     fn palette_accept(&mut self) {
-        let mut typed = self.command.trim().to_string();
+        let raw = self.command.clone();
+        let mut typed = raw.trim().to_string();
         let picked = self.cmd_suggestions.get(self.cmd_sel).cloned();
         let navigated = std::mem::take(&mut self.cmd_navigated) && picked.is_some();
         self.mode = Mode::Table;
@@ -699,9 +700,9 @@ impl App {
                 }))
         {
             if let Some(s) = picked.as_ref().filter(|s| s.kind == SuggestKind::Layout)
-                && let Some(slot) = layout_word(&typed)
+                && let Some(slot) = layout_word(&raw)
             {
-                let mut words: Vec<&str> = typed.split_whitespace().collect();
+                let mut words: Vec<&str> = raw.split_whitespace().collect();
                 words.truncate(slot);
                 words.push(&s.label);
                 typed = words.join(" ");
@@ -1025,7 +1026,7 @@ impl App {
                 self.suggest_contexts(&arg);
                 return;
             }
-            if head == "layout" {
+            if head == "layout" && self.cluster.resolve(&head).is_none() {
                 let layouts = self.kind_layouts();
                 self.suggest_layouts(layouts, &arg);
                 return;
@@ -1249,26 +1250,30 @@ impl App {
     }
 
     /// Palette completions for `:layout <name>` and `-o <name>`: `default`
-    /// pinned first, then the kind's layouts fuzzy-matched against the
-    /// partial argument.
+    /// pinned first, then the kind's layouts. A partial argument fuzzy-matches
+    /// `default` and the layouts together, with an exact name first.
     fn suggest_layouts(&mut self, layouts: Vec<String>, arg: &str) {
-        let mut scored: Vec<(i64, String)> = Vec::new();
-        for name in layouts {
-            let score = if arg.is_empty() {
-                0
-            } else if let Some(s) = self.matcher.score(&name, arg) {
-                s
-            } else {
-                continue;
-            };
-            scored.push((score, name));
-        }
-        rank_completions(&mut scored, |s| s.as_str(), !arg.is_empty());
-        let default = (arg.is_empty() || self.matcher.score("default", arg).is_some())
-            .then(|| "default".to_string());
-        self.cmd_suggestions = default
+        let names: Vec<String> = if arg.is_empty() {
+            std::iter::once("default".to_string())
+                .chain(layouts)
+                .collect()
+        } else {
+            let mut scored: Vec<(i64, String)> = std::iter::once("default".to_string())
+                .chain(layouts)
+                .filter_map(|name| {
+                    let score = if name.eq_ignore_ascii_case(arg) {
+                        i64::MAX
+                    } else {
+                        self.matcher.score(&name, arg)?
+                    };
+                    Some((score, name))
+                })
+                .collect();
+            rank_completions(&mut scored, |s| s.as_str(), true);
+            scored.into_iter().map(|(_, name)| name).collect()
+        };
+        self.cmd_suggestions = names
             .into_iter()
-            .chain(scored.into_iter().map(|(_, name)| name))
             .map(|label| Suggestion {
                 label,
                 kind: SuggestKind::Layout,

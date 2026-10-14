@@ -41402,3 +41402,124 @@ async fn context_switch_keeps_a_layout_the_destination_version_defines() {
     assert_eq!(app.active_layout(), Some("slim"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn output_flag_completion_accepts_the_highlighted_layout() {
+    let (mut app, _rx) = test_app();
+    install_views(&mut app, LAYOUT_VIEWS);
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for c in "pods -o ".chars() {
+        app.handle_key(press(KeyCode::Char(c))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Down)).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert!(!app.flash_err, "{}", app.flash);
+    assert_eq!(app.active_layout(), Some("images"));
+}
+
+#[tokio::test]
+async fn an_exact_layout_name_outranks_default() {
+    let (mut app, _rx) = test_app();
+    install_views(
+        &mut app,
+        "[views.\"pods:def\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    palette(&mut app, "pods -o def");
+    assert_eq!(app.active_layout(), Some("def"));
+    palette(&mut app, "layout default");
+    assert_eq!(app.active_layout(), None);
+    palette(&mut app, "layout def");
+    assert_eq!(app.active_layout(), Some("def"));
+}
+
+#[tokio::test]
+async fn a_resource_named_layout_keeps_its_namespace_argument() {
+    let (mut app, _rx) = test_app();
+    install_views(&mut app, LAYOUT_VIEWS);
+    app.cluster
+        .register_kind("example.com", "Layout", "layouts", true);
+    palette(&mut app, "pods -o images");
+    palette(&mut app, "layout default");
+    assert_eq!(app.kind_plural, "layouts");
+    assert_eq!(app.namespace, "default");
+}
+
+#[tokio::test]
+async fn switching_to_the_default_layout_loads_printer_columns() {
+    let (mut app, _rx) = test_app();
+    app.cluster
+        .register_kind("example.com", "Widget", "widgets", true);
+    install_views(
+        &mut app,
+        "[views.\"widgets:slim\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    let resource = app.cluster.resolve("widgets").unwrap().resource_key();
+    palette(&mut app, "widgets -o slim");
+    assert!(!app.crd_views.contains_key(&resource));
+    palette(&mut app, "layout default");
+    assert!(app.crd_views.contains_key(&resource));
+}
+
+#[tokio::test]
+async fn layout_names_ignore_case() {
+    let (mut app, _rx) = test_app();
+    install_views(
+        &mut app,
+        "[views.\"pods:Images\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    app.bookmarks = vec![crate::config::Bookmark {
+        key: Some("ctrl-y".into()),
+        name: "images".into(),
+        resource: "pods".into(),
+        layout: Some("Images".into()),
+        ..Default::default()
+    }];
+    app.handle_key(ctrl(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.active_layout(), Some("images"));
+    palette(&mut app, "layout DEFAULT");
+    assert_eq!(app.active_layout(), None);
+    palette(&mut app, "layout IMAGES");
+    assert_eq!(app.active_layout(), Some("images"));
+}
+
+#[tokio::test]
+async fn history_falls_back_to_default_when_its_layout_is_gone() {
+    let dir = std::env::temp_dir().join(format!("sofka-history-layout-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_config(&dir, LAYOUT_VIEWS);
+    let (mut app, _rx) = test_app();
+    app.config = crate::config::ConfigLoader::from_dir(Some(dir.clone()));
+    palette(&mut app, "reload");
+    type_resource_query(&mut app, "pods -o images");
+    palette(&mut app, "deployments");
+    write_config(
+        &dir,
+        "[views.\"pods:slim\"]\ncolumns = [{ name = \"X\", path = \"/x\" }]\n",
+    );
+    palette(&mut app, "reload");
+    type_resource_query(&mut app, "pods -o slim");
+    app.handle_key(press(KeyCode::Char('['))).unwrap();
+    app.handle_key(press(KeyCode::Char('['))).unwrap();
+    assert_eq!(app.kind_plural, "pods");
+    assert_eq!(app.active_layout(), None);
+    assert!(app.flash_err);
+    assert!(app.flash.contains("no layout 'images'"), "{}", app.flash);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_bookmark_view_keeps_the_missing_layout_warning() {
+    let (mut app, _rx) = test_app();
+    install_views(&mut app, LAYOUT_VIEWS);
+    app.bookmarks = vec![crate::config::Bookmark {
+        key: Some("ctrl-y".into()),
+        name: "deploy pulse".into(),
+        resource: "deployments".into(),
+        layout: Some("images".into()),
+        view: Some("pulse".into()),
+        ..Default::default()
+    }];
+    app.handle_key(ctrl(KeyCode::Char('y'))).unwrap();
+    assert!(app.flash_err);
+    assert!(app.flash.contains("no layout 'images'"), "{}", app.flash);
+}

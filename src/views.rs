@@ -213,9 +213,8 @@ pub(crate) fn key_plural(key: &str) -> &str {
 
 /// The named layout a view key selects (`pods:images@prod` → `images`), if any.
 pub(crate) fn key_layout(key: &str) -> Option<&str> {
-    let last = key.rsplit('/').next()?;
-    let last = last.split('@').next().unwrap_or(last);
-    last.split_once(':').map(|(_, layout)| layout)
+    let base = key.split('@').next().unwrap_or(key);
+    base.split_once(':').map(|(_, layout)| layout)
 }
 
 /// Split a resource argument into the resource and the named layout it
@@ -233,7 +232,7 @@ pub const RESERVED_LAYOUTS: &[&str] = &["default", "wide"];
 fn valid_layout_name(name: &str) -> bool {
     !name.is_empty()
         && !RESERVED_LAYOUTS.contains(&name.to_lowercase().as_str())
-        && !name.contains(|c: char| c.is_whitespace() || matches!(c, '@' | ':'))
+        && !name.contains(|c: char| c.is_whitespace() || matches!(c, '@' | ':' | '/'))
 }
 
 /// The namespace a view key is qualified with (`pods@prod` → `prod`), if any.
@@ -335,17 +334,13 @@ pub fn compile(
             warnings.push(format!("views.\"{key}\": unknown key '{field}' ignored"));
         }
         let resource = key.split_once('@').map_or(key.as_str(), |(r, _)| r);
-        let layout = resource
-            .rsplit('/')
-            .next()
-            .and_then(|last| last.split_once(':'))
-            .map(|(_, layout)| layout);
+        let layout = resource.split_once(':').map(|(_, layout)| layout);
         if let Some(layout) = layout
             && !valid_layout_name(layout)
         {
             warnings.push(format!(
                 "views.\"{key}\": invalid layout name '{layout}' (must not be empty, \
-                 default, or wide, or contain spaces, '@' or ':'); view ignored"
+                 default, or wide, or contain spaces, '@', ':' or '/'); view ignored"
             ));
             continue;
         }
@@ -1983,6 +1978,8 @@ mod tests {
             columns = [{ name = "X", path = "/x" }]
             [views."pods:WIDE"]
             columns = [{ name = "X", path = "/x" }]
+            [views."pods:images/tags"]
+            columns = [{ name = "X", path = "/x" }]
             "#,
         );
         let view = &views["pods:images"];
@@ -2008,6 +2005,7 @@ mod tests {
             "pods:a:b",
             "pods:Default",
             "pods:WIDE",
+            "pods:images/tags",
         ] {
             assert!(!views.contains_key(key), "{key}");
             assert!(
@@ -2017,7 +2015,7 @@ mod tests {
                 "{key}: {warnings:?}"
             );
         }
-        assert_eq!(warnings.len(), 10, "{warnings:?}");
+        assert_eq!(warnings.len(), 11, "{warnings:?}");
     }
 
     #[test]

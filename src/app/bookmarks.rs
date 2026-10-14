@@ -74,13 +74,18 @@ impl App {
         if let Some(sort) = &bm.sort {
             self.apply_sort_spec(sort);
         }
+        let warning = self.flash_err.then(|| self.flash.clone());
         match bm.view.as_deref() {
             Some("xray") => self.open_xray(),
             Some("pulse") => self.open_pulse(),
             _ => {}
         }
-        if !self.flash_err {
-            self.flash = format!("bookmark: {}", bm.name);
+        match warning {
+            Some(warning) => self.flash_warn(&warning),
+            None => {
+                self.flash = format!("bookmark: {}", bm.name);
+                self.flash_err = false;
+            }
         }
         true
     }

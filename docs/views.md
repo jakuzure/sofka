@@ -380,8 +380,9 @@ sets only `columns`, `replace`, and `sort`, and does not inherit columns from
 the base key. `drill`, `refs`, `children`, and `node` describe the kind, so
 they always come from the base key; setting them on a named layout produces a
 configuration warning and they are ignored. `default` and `wide` are reserved.
-An empty name, or one with spaces, `@`, or `:`, also produces a configuration
-warning and the view is ignored.
+An empty name, or one with spaces, `@`, `:`, or `/`, also produces a
+configuration warning and the view is ignored. Layout names are not
+case-sensitive.
 
 Select a layout with `:pods -o images` or `:pods:images`, or switch the current
 kind with `:layout images`. `:layout` without a name lists the kind's layouts,

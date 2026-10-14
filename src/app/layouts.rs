@@ -26,6 +26,8 @@ impl App {
     /// `default` drops back to the default layout and `wide` turns wide mode
     /// on. Returns the warning to show when the kind has no such layout.
     pub(super) fn select_layout(&mut self, name: &str) -> Result<(), String> {
+        let name = name.to_lowercase();
+        let name = name.as_str();
         let Some(kind) = self.layout_kind().cloned() else {
             return Err("this view has no layouts".into());
         };
@@ -58,8 +60,11 @@ impl App {
         self.refresh_view_spec();
         self.apply_remembered_sort();
         self.apply_view_sort();
+        if let Some(kind) = self.kind.clone() {
+            self.maybe_fetch_printer_columns(&kind);
+        }
         self.save_history_filter();
-        self.flash = match (name, self.active_layout()) {
+        self.flash = match (name.to_lowercase().as_str(), self.active_layout()) {
             ("wide", _) => "wide columns: on".to_string(),
             (_, Some(layout)) => format!("layout: {}:{layout}", self.list_title()),
             (_, None) => format!("layout: {} default", self.list_title()),

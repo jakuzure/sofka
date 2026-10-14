@@ -336,7 +336,12 @@ impl App {
         self.namespace = entry.namespace;
         let title = kind.title();
         self.set_root_view(kind);
-        let _ = self.select_layout(entry.layout.as_deref().unwrap_or("default"));
+        let layout_warning = self
+            .select_layout(entry.layout.as_deref().unwrap_or("default"))
+            .err();
+        if layout_warning.is_some() {
+            let _ = self.select_layout("default");
+        }
         self.filter = entry.filter;
         self.flash = format!(
             "history {}/{}: {title} in {}",
@@ -346,6 +351,9 @@ impl App {
         );
         self.flash_err = false;
         self.start_watch();
+        if let Some(warning) = layout_warning {
+            self.flash_warn(&warning);
+        }
     }
 
     pub(super) fn push_frame(&mut self) {
@@ -591,7 +599,7 @@ impl App {
     }
 
     /// Read CRD columns first, then try server Tables if no columns are available.
-    fn maybe_fetch_printer_columns(&mut self, kind: &Kind) {
+    pub(super) fn maybe_fetch_printer_columns(&mut self, kind: &Kind) {
         let user_has_columns = self
             .active_user_view()
             .is_some_and(|v| !v.columns.is_empty());
