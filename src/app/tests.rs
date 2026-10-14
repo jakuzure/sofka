@@ -41523,3 +41523,51 @@ async fn a_bookmark_view_keeps_the_missing_layout_warning() {
     assert!(app.flash_err);
     assert!(app.flash.contains("no layout 'images'"), "{}", app.flash);
 }
+
+#[tokio::test]
+async fn a_named_layout_keeps_the_base_views_kind_settings() {
+    let (mut app, _rx) = test_app();
+    app.cluster
+        .register_kind("karpenter.sh", "NodePool", "nodepools", false);
+    app.cluster
+        .register_kind("karpenter.sh", "NodeClaim", "nodeclaims", false);
+    install_views(
+        &mut app,
+        r#"
+[views."karpenter.sh/v1/nodepools"]
+node = "/status/node"
+children = ["nodeclaims"]
+refs = [{ path = "/spec/template/spec/nodeClassRef/name", kind = "nodeclaims" }]
+[views."karpenter.sh/v1/nodepools".drill]
+kind = "nodeclaims"
+labels = "karpenter.sh/nodepool={name}"
+
+[views."nodepools:slim"]
+replace = true
+columns = [{ name = "NAME", builtin = "NAME" }]
+"#,
+    );
+    type_resource_query(&mut app, "nodepools -o slim");
+    assert_eq!(app.active_layout(), Some("slim"));
+    assert_eq!(app.node_pointer().as_deref(), Some("/status/node"));
+    let ar = app.kind.as_ref().unwrap().ar.clone();
+    assert_eq!(
+        crate::adjacent::children_for(&app.user_views, &ar, None),
+        ["nodeclaims"]
+    );
+    assert!(
+        crate::adjacent::rules_for(&app.user_views, &ar, None)
+            .iter()
+            .any(|rule| rule.path == "/spec/template/spec/nodeClassRef/name")
+    );
+
+    apply(
+        &mut app,
+        json!({"apiVersion": "karpenter.sh/v1", "kind": "NodePool",
+               "metadata": {"name": "default"}}),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.kind_plural, "nodeclaims");
+    assert_eq!(app.labels.as_deref(), Some("karpenter.sh/nodepool=default"));
+}

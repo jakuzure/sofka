@@ -837,7 +837,9 @@ pub fn lookup<'a>(
 
 /// Find the view for a resource in a named layout: `key:layout@namespace`
 /// for every key form, then `key:layout`. Without a layout, or when the kind
-/// has no such layout, the default view from [`lookup`].
+/// has no such layout, the default view from [`lookup`]. Only its columns,
+/// `replace`, and `sort` are read; [`drill_for`], [`node_pointer`], and the
+/// adjacent rules resolve from [`lookup_keys`], which never names a layout.
 pub fn lookup_layout<'a>(
     views: &'a HashMap<String, View>,
     ar: &ApiResource,
