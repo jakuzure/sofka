@@ -517,6 +517,12 @@ pub fn selected_row() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Cursor on a marked row: the mark color as the bar, like k9s, so marking
+/// the row under the cursor shows without moving away from it.
+pub fn selected_marked_row() -> Style {
+    selected_row().bg(mark())
+}
+
 /// Sort-indicator arrow in the header: k9s `header.sorterColor` (sky).
 pub fn sorter() -> Color {
     sky()
