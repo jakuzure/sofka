@@ -80,9 +80,14 @@ impl App {
             Some("pulse") => self.open_pulse(),
             _ => {}
         }
-        match warning {
-            Some(warning) => self.flash_warn(&warning),
-            None => {
+        let opening_error = self.flash_err.then(|| self.flash.clone());
+        match (opening_error, warning) {
+            (Some(error), Some(warning)) if error != warning => {
+                self.flash_warn(&format!("{error} · {warning}"));
+            }
+            (Some(_), _) => {}
+            (None, Some(warning)) => self.flash_warn(&warning),
+            (None, None) => {
                 self.flash = format!("bookmark: {}", bm.name);
                 self.flash_err = false;
             }

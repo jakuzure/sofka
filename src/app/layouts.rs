@@ -73,15 +73,11 @@ impl App {
     }
 
     /// `:layout` without a name: the palette, listing the current kind's
-    /// layouts with `default` first.
+    /// layouts with `default` first. A kind without named layouts lists only
+    /// `default`.
     pub(super) fn open_layout_picker(&mut self) {
-        let Some(kind) = self.layout_kind() else {
+        if self.layout_kind().is_none() {
             self.flash_warn("this view has no layouts");
-            return;
-        };
-        if self.kind_layouts().is_empty() {
-            let plural = kind.ar.plural.clone();
-            self.flash_warn(&format!("{plural} has no named layouts"));
             return;
         }
         self.open_palette();

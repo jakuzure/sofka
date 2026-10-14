@@ -41211,8 +41211,12 @@ async fn layout_command_switches_and_lists_the_current_kinds_layouts() {
 
     palette(&mut app, "deployments");
     palette(&mut app, "layout");
+    assert_eq!(app.mode, Mode::Command);
+    assert_eq!(suggestion_labels(&app), ["default"]);
+    app.handle_key(press(KeyCode::Enter)).unwrap();
     assert_eq!(app.mode, Mode::Table);
-    assert!(app.flash.contains("no named layouts"), "{}", app.flash);
+    assert_eq!(app.active_layout(), None);
+    assert!(!app.flash_err, "{}", app.flash);
 }
 
 #[tokio::test]
@@ -41570,4 +41574,27 @@ columns = [{ name = "NAME", builtin = "NAME" }]
     app.handle_key(press(KeyCode::Enter)).unwrap();
     assert_eq!(app.kind_plural, "nodeclaims");
     assert_eq!(app.labels.as_deref(), Some("karpenter.sh/nodepool=default"));
+}
+
+#[tokio::test]
+async fn a_bookmark_reports_a_view_that_fails_to_open() {
+    let (mut app, _rx) = test_app();
+    install_views(&mut app, LAYOUT_VIEWS);
+    assert!(app.kind.is_none());
+    app.bookmarks = vec![crate::config::Bookmark {
+        key: Some("ctrl-y".into()),
+        name: "prod xray".into(),
+        resource: "pods".into(),
+        namespace: Some("prod-*".into()),
+        layout: Some("nope".into()),
+        view: Some("xray".into()),
+        ..Default::default()
+    }];
+    app.handle_key(ctrl(KeyCode::Char('y'))).unwrap();
+    assert!(app.flash_err);
+    assert!(
+        app.flash.contains("select a resource first"),
+        "{}",
+        app.flash
+    );
 }
