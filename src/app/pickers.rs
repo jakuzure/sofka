@@ -979,6 +979,7 @@ impl App {
         plugin_warnings.extend(crate::config::logs_warnings(&self.logs_cfg));
         let (views, view_warnings) = crate::views::compile(&resolved.config.views);
         self.user_views = views;
+        self.prune_layouts();
         let (thresholds, threshold_warnings) =
             crate::thresholds::compile(&resolved.config.thresholds);
         self.thresholds = thresholds;
