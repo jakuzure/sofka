@@ -199,6 +199,7 @@ pub const BUILTIN_DRILLS: &[&str] = &[
     "helmhistory",
     "helmreleases",
     "rollouthistory",
+    "ns-resources",
 ];
 
 /// The plural a view key names: the last segment of `apiVersion/plural`,
