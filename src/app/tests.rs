@@ -16287,6 +16287,21 @@ async fn help_jumps_between_sections() {
     app.handle_key(press(KeyCode::Char('G'))).unwrap();
     app.handle_key(press(KeyCode::Char(']'))).unwrap();
     assert_eq!(app.help_scroll, app.help_max_scroll);
+
+    // Keys queued behind a cleared filter arrive before the next frame.
+    app.handle_key(press(KeyCode::Char('/'))).unwrap();
+    for c in "Keys: detail".chars() {
+        app.handle_key(press(KeyCode::Char(c))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+    assert_eq!(app.help_cache.as_ref().unwrap().sections().len(), 1);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Help);
+    app.handle_key(press(KeyCode::Char(']'))).unwrap();
+    assert_eq!(app.help_scroll, rows[0]);
+    app.handle_key(press(KeyCode::Char(']'))).unwrap();
+    assert_eq!(app.help_scroll, rows[1]);
 }
 
 #[tokio::test]

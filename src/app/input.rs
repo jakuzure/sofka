@@ -1723,12 +1723,14 @@ impl App {
             (Some(Action::First), _) => self.help_scroll = 0,
             (Some(Action::Last), _) => self.help_scroll = self.help_max_scroll,
             (Some(Action::NextSection), _) => {
+                crate::ui::refresh_help(self);
                 let sections = self.help_cache.as_ref().map_or(&[][..], |c| c.sections());
                 if let Some(&(_, row)) = sections.iter().find(|(_, row)| *row > self.help_scroll) {
                     self.help_scroll = row.min(self.help_max_scroll);
                 }
             }
             (Some(Action::PreviousSection), _) => {
+                crate::ui::refresh_help(self);
                 let sections = self.help_cache.as_ref().map_or(&[][..], |c| c.sections());
                 self.help_scroll = sections
                     .iter()

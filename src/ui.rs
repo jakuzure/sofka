@@ -3393,6 +3393,7 @@ fn help_rows(
 
 pub(crate) struct HelpCache {
     key: u64,
+    width: usize,
     lines: Vec<Line<'static>>,
     title: String,
     sections: HelpSections,
@@ -3435,19 +3436,36 @@ fn help_cache_key(app: &App, width: usize) -> u64 {
     hash.finish()
 }
 
-fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
-    let width = usize::from(area.width.saturating_sub(2)).max(1);
+fn update_help_cache(app: &mut App, width: usize) {
     let key = help_cache_key(app, width);
     if app.help_cache.as_ref().is_none_or(|cache| cache.key != key) {
         let (lines, title, sections) = build_help(app, width);
         app.help_cache = Some(HelpCache {
             key,
+            width,
             lines,
             title,
             sections,
         });
     }
+}
+
+/// Rebuild help at the last drawn width when its content changed since that
+/// frame. Keys queued behind a filter change are handled before the redraw.
+pub(crate) fn refresh_help(app: &mut App) {
+    let Some(width) = app.help_cache.as_ref().map(|cache| cache.width) else {
+        return;
+    };
+    update_help_cache(app, width);
+    let lines = app.help_cache.as_ref().map_or(0, |cache| cache.lines.len());
+    app.help_max_scroll =
+        (lines.min(usize::from(u16::MAX)) as u16).saturating_sub(app.help_viewport_h);
+}
+
+fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
+    let show_scrollbars = app.scrollbars_visible();
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
+    update_help_cache(app, width);
     let cache = app.help_cache.as_ref().expect("help content is ready");
     // Record the content height for paging and clamp the offset after layout changes.
     let inner_h = area.height.saturating_sub(2);
