@@ -22794,10 +22794,16 @@ async fn ctrl_z_filters_argocd_faults() {
         ),
     );
     apply(&mut app, appset("unknown", json!([])));
+    let mut terminating = appset(
+        "terminating",
+        json!([{"type": "ResourcesUpToDate", "status": "True"}]),
+    );
+    terminating["metadata"]["deletionTimestamp"] = json!("2026-10-15T00:00:00Z");
+    apply(&mut app, terminating);
     assert!(app.faults_filter_active());
     let mut names = row_names(&app);
     names.sort();
-    assert_eq!(names, ["error", "unknown"]);
+    assert_eq!(names, ["error", "terminating", "unknown"]);
 }
 
 #[tokio::test]

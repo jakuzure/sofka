@@ -395,7 +395,8 @@ include those conditions. Row filters can search the route paths.
     ResourceSets, FluxInstances, and ResourceSetInputProviders: suspended,
     terminating, or a `Ready` condition that is not `True`.
   - Argo CD Applications: health other than `Healthy`, sync other than
-    `Synced`, or terminating. ApplicationSets: any status other than `Synced`.
+    `Synced`, or terminating. ApplicationSets: any status other than `Synced`,
+    or terminating.
 
   The table title shows `[faults]` while the filter is on. It works with the
   text filter and current namespace or drill scope. Press `Ctrl+Z` again to
