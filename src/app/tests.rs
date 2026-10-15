@@ -16414,6 +16414,15 @@ async fn help_lists_plugins_after_table_keys_with_the_current_kind_first() {
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
+    // One app throughout, so a reopened help must not reuse the order cached
+    // for the previous kind or view.
+    let (mut app, _rx) = test_app();
+    app.plugins = vec![
+        plugin("deploy-run", &["deployments"]),
+        plugin("pod-run", &["pods"]),
+        plugin("any-run", &[]),
+    ];
+    let mut terminal = Terminal::new(TestBackend::new(200, 1000)).unwrap();
     for (kind, source, expected) in [
         ("pods", Mode::Table, ["pod-run", "any-run", "deploy-run"]),
         (
@@ -16421,18 +16430,12 @@ async fn help_lists_plugins_after_table_keys_with_the_current_kind_first() {
             Mode::Table,
             ["deploy-run", "any-run", "pod-run"],
         ),
+        ("pods", Mode::Table, ["pod-run", "any-run", "deploy-run"]),
         ("pods", Mode::Logs, ["deploy-run", "pod-run", "any-run"]),
     ] {
-        let (mut app, _rx) = test_app();
         app.switch_kind(kind);
-        app.plugins = vec![
-            plugin("deploy-run", &["deployments"]),
-            plugin("pod-run", &["pods"]),
-            plugin("any-run", &[]),
-        ];
         app.mode = source;
         app.handle_key(press(KeyCode::Char('?'))).unwrap();
-        let mut terminal = Terminal::new(TestBackend::new(200, 1000)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let sections: Vec<&str> = app
             .help_cache
@@ -16456,6 +16459,8 @@ async fn help_lists_plugins_after_table_keys_with_the_current_kind_first() {
             positions.is_sorted(),
             "{kind} from {source:?}: {expected:?} at {positions:?}"
         );
+        app.handle_key(press(KeyCode::Char('q'))).unwrap();
+        assert_eq!(app.mode, source);
     }
 }
 
