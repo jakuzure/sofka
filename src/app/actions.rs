@@ -485,37 +485,57 @@ impl App {
         );
     }
 
-    /// Save the filtered log buffer to a temp file (k9s Ctrl-S).
+    /// Save the filtered log buffer to `save_dir` (k9s Ctrl-S).
     pub(super) fn save_logs(&mut self) {
         let text = self.filtered_log_text();
         if text.is_empty() {
             self.flash_warn("no log lines to save");
             return;
         }
-        let claim = self.claim_status("saving logs…");
+        let title = self.logs.view.title.clone();
+        self.save_text(text, &title, "log", "logs");
+    }
+
+    /// Save the whole open document to `save_dir`, as rendered and ignoring
+    /// the search, like [`Self::copy_doc`].
+    pub(super) fn save_doc(&mut self) {
+        let text = self.doc_text();
+        if text.is_empty() {
+            self.flash_warn("nothing to save");
+            return;
+        }
+        let ext = if self.mode == Mode::Diff || self.detail.yaml {
+            "yaml"
+        } else {
+            "txt"
+        };
+        let title = self.detail.title.clone();
+        self.save_text(text, &title, ext, "document");
+    }
+
+    /// Write `text` off the UI thread to `sofka-<title>-<ts>.<ext>` in
+    /// `save_dir`, creating the directory first.
+    fn save_text(&mut self, text: String, title: &str, ext: &str, what: &'static str) {
+        let claim = self.claim_status(format!("saving {what}…"));
         // Saving is a one-shot file operation, not part of the live log
         // stream. Leaving Logs bumps `log_gen`, but must not drop this result
         // and strand its progress flash.
         let genr = self.generation;
         let tx = self.tx.clone();
         let ts = k8s_openapi::jiff::Timestamp::now().as_second();
-        let safe: String = self
-            .logs
-            .view
-            .title
+        let safe: String = title
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '-' })
             .collect();
-        let path = std::env::temp_dir().join(format!("sofka-{safe}-{ts}.log"));
+        let name = format!("sofka-{safe}-{ts}.{ext}");
+        let save_dir = self.save_dir.clone();
         tokio::spawn(async move {
-            let result = tokio::fs::write(&path, text)
-                .await
-                .map(|_| path)
-                .map_err(|e| e.to_string());
+            let result = write_saved(save_dir.as_deref(), &name, text).await;
             let _ = tx
-                .send(Msg::LogsSaved {
+                .send(Msg::Saved {
                     generation: genr,
                     claim,
+                    what,
                     result,
                 })
                 .await;
@@ -1667,6 +1687,7 @@ impl App {
         self.hide_header = resolved.config.hide_header;
         self.terminal_title = resolved.config.terminal_title.unwrap_or(true);
         self.update_check = resolved.config.update_check.unwrap_or(true);
+        self.save_dir = resolved.config.save_dir;
         self.plugins = resolved.config.plugins;
         self.bookmarks = resolved.config.bookmarks;
         self.workspaces = resolved.config.workspaces;
@@ -3152,4 +3173,20 @@ async fn run_helm(argv: &[String]) -> std::result::Result<(), String> {
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+async fn write_saved(
+    save_dir: Option<&str>,
+    name: &str,
+    text: String,
+) -> Result<std::path::PathBuf, String> {
+    let dir = crate::config::save_dir(save_dir)?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let path = dir.join(name);
+    tokio::fs::write(&path, text)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(path)
 }
