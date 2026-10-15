@@ -560,7 +560,8 @@ include those conditions. Row filters can search the route paths.
   empty. `⏎` opens the kind's own view in that namespace and `esc` returns,
   counting again. `r` counts again too, keeping the previous counts on screen
   until the new ones are in. Filter, sort, and view history work as in any
-  table; keys that act on objects are disabled on these rows.
+  table; keys, commands, and plugins that act on objects are disabled on these
+  rows, while `target = "context"` plugins still run.
 - **Pulse dashboard** (`:pulse`) - cluster-health tiles, refreshed every 5s.
 - **Xray tree** (`:xray`) - a hierarchical view from the current kind down
   through owner references to pods and containers.

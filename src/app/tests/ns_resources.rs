@@ -281,3 +281,110 @@ async fn view_history_returns_to_ns_resources() {
     assert_eq!(app.namespace, "prod");
     assert!(app.flash.contains("resources in prod"), "{}", app.flash);
 }
+
+#[tokio::test]
+async fn namespace_patterns_are_refused_before_the_view_changes() {
+    let (mut app, _rx) = test_app();
+    app.namespace = "default".into();
+    app.switch_kind("pods");
+    let history = app.history.len();
+
+    type_resource_query(&mut app, "ns-resources prod-*");
+    assert_eq!(app.kind_plural, "pods");
+    assert_eq!(app.namespace, "default");
+    assert_eq!(app.history.len(), history);
+    assert!(app.flash_err);
+    assert!(app.flash.contains("not a pattern"), "{}", app.flash);
+
+    app.namespace = "prod-*".into();
+    type_resource_query(&mut app, "ns-resources");
+    assert_eq!(app.kind_plural, "pods");
+    assert!(app.flash.contains("not a pattern"), "{}", app.flash);
+}
+
+#[tokio::test]
+async fn switching_the_view_to_a_namespace_pattern_is_refused() {
+    let (mut app, _rx) = test_app();
+    open(&mut app, "prod");
+    let generation = app.generation;
+    type_resource_query(&mut app, "namespaces prod-*");
+    assert!(app.ns_resources_active());
+    assert_eq!(app.namespace, "prod");
+    assert!(app.flash.contains("not a pattern"), "{}", app.flash);
+    assert_eq!(app.generation, generation);
+}
+
+#[tokio::test]
+async fn object_plugins_are_refused_on_kind_rows() {
+    let (mut app, _rx) = test_app();
+    let claim = open(&mut app, "prod");
+    counted(&mut app, claim, "deployments", objects(4));
+    done(&mut app, claim);
+    app.plugins = vec![
+        crate::config::Plugin {
+            key: "ctrl-g".into(),
+            name: "objects".into(),
+            command: "true".into(),
+            palette: Some("objects".into()),
+            ..Default::default()
+        },
+        crate::config::Plugin {
+            key: "ctrl-o".into(),
+            name: "context".into(),
+            command: "true".into(),
+            target: Some("context".into()),
+            ..Default::default()
+        },
+    ];
+
+    app.handle_key(ctrl(KeyCode::Char('g'))).unwrap();
+    assert!(app.pending.is_none());
+    assert!(
+        app.flash.contains("ns-resources rows are kinds"),
+        "{}",
+        app.flash
+    );
+    type_resource_query(&mut app, "objects");
+    assert!(app.pending.is_none());
+    assert!(
+        app.flash.contains("ns-resources rows are kinds"),
+        "{}",
+        app.flash
+    );
+
+    app.handle_key(ctrl(KeyCode::Char('o'))).unwrap();
+    assert!(matches!(app.pending, Some(Suspend::Shell(_))));
+}
+
+#[tokio::test]
+async fn enter_opens_the_version_that_was_counted() {
+    let (mut app, _rx) = test_app();
+    let claim = open(&mut app, "prod");
+    let mut deployments = app.cluster.resolve("deployments").unwrap();
+    deployments.ar.version = "v2".into();
+    deployments.ar.api_version = "apps/v2".into();
+    counted_kind(&mut app, claim, &deployments, objects(4));
+    done(&mut app, claim);
+
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.kind_plural, "deployments");
+    assert_eq!(app.kind.as_ref().unwrap().ar.api_version, "apps/v2");
+}
+
+#[tokio::test]
+async fn a_custom_resource_sharing_the_plural_keeps_its_own_view() {
+    let (mut app, _rx) = test_app();
+    app.cluster
+        .register_kind("example.com", "NsResource", "ns-resources", true);
+    app.switch_kind("ns-resources.example.com");
+    assert_eq!(app.kind_plural, "ns-resources");
+    assert!(!app.ns_resources_active());
+    apply(
+        &mut app,
+        json!({"apiVersion": "example.com/v1", "kind": "NsResource",
+               "metadata": {"name": "one", "namespace": "default"}}),
+    );
+    app.handle_key(press(KeyCode::Char('y'))).unwrap();
+    assert!(!app.flash.contains("⏎ opens one"), "{}", app.flash);
+    assert_ne!(app.mode, Mode::Table);
+}

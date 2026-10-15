@@ -584,7 +584,10 @@ pub fn compile(
                 let rbac_group = key_lc
                     .split_once('/')
                     .is_none_or(|(group, _)| group == "rbac.authorization.k8s.io");
-                if BUILTIN_DRILLS.contains(&plural) && (!rbac_plural || rbac_group) {
+                // `ns-resources` is a synthetic view; a custom resource
+                // sharing its plural is configured by its group.
+                let synthetic = plural != "ns-resources" || !key_lc.contains('/');
+                if BUILTIN_DRILLS.contains(&plural) && (!rbac_plural || rbac_group) && synthetic {
                     warnings.push(format!(
                         "views.\"{key}\": drill is ignored — `enter` on {plural} has a \
                      built-in drill-down that config doesn't replace"
@@ -2169,6 +2172,18 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("drill is ignored"))
         );
+    }
+
+    #[test]
+    fn ns_resources_drill_is_builtin_only_for_the_synthetic_view() {
+        let ignored = |key: &str| {
+            let (_, warnings) = compile_toml(&format!(
+                "[views.\"{key}\"]\ndrill = {{ kind = \"secrets\" }}\n"
+            ));
+            warnings.iter().any(|w| w.contains("drill is ignored"))
+        };
+        assert!(ignored("ns-resources"));
+        assert!(!ignored("example.com/ns-resources"));
     }
 
     #[test]

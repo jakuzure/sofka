@@ -91,6 +91,16 @@ impl App {
             });
             return;
         }
+        if let Some(ns) = ns
+            && self.ns_resources_active()
+            && self
+                .cluster
+                .resolve(input)
+                .is_some_and(|k| k.ar.plural.eq_ignore_ascii_case("namespaces"))
+            && self.ns_resources_refuses(ns)
+        {
+            return;
+        }
         if let Some(ns) = ns.filter(|ns| namespace_patterns::is_pattern(&normalize_ns(ns)))
             && (self.cluster.resolve(input).is_some()
                 || workloads::NAMES.contains(&input.trim().to_lowercase().as_str()))

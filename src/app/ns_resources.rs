@@ -107,6 +107,22 @@ fn identity() -> Kind {
     }
 }
 
+/// What the view says when asked to count a namespace pattern.
+const PATTERN_WARNING: &str = "ns-resources counts one namespace or all namespaces, not a pattern";
+
+/// One summary line for every API group discovery could not read: their
+/// kinds are missing from the counts.
+pub(crate) fn discovery_warning(skipped: Vec<String>) -> Option<String> {
+    match skipped.len() {
+        0 => None,
+        1 => skipped.into_iter().next(),
+        n => Some(format!(
+            "{n} API groups not counted: {}",
+            skipped.join("; ")
+        )),
+    }
+}
+
 /// The row for one counted kind, or `None` for a kind with no objects.
 pub fn row(kind: &Kind, count: &Count) -> Option<DynamicObject> {
     let cell = match count {
@@ -183,7 +199,7 @@ async fn run(
 ) {
     let (kinds, warning) =
         match timeout(DISCOVERY_TIME, crate::k8s::namespaced_kinds(&client)).await {
-            Ok(Ok((kinds, skipped))) => (kinds, skipped.into_iter().next()),
+            Ok(Ok((kinds, skipped))) => (kinds, discovery_warning(skipped)),
             Ok(Err(e)) => (known, Some(format!("API discovery failed: {e}"))),
             Err(_) => (known, Some("API discovery timed out".into())),
         };
@@ -225,12 +241,31 @@ async fn run(
 }
 
 impl App {
+    /// Whether the synthetic view is open, not a custom resource that
+    /// happens to share its plural.
     pub fn ns_resources_active(&self) -> bool {
         self.kind_plural == VIEW
+            && self
+                .kind
+                .as_ref()
+                .is_some_and(|k| k.ar.group.is_empty() && k.ar.kind == identity().ar.kind)
+    }
+
+    /// Refuse a namespace pattern before anything about the view changes.
+    pub(super) fn ns_resources_refuses(&mut self, namespace: &str) -> bool {
+        if namespace_patterns::is_pattern(&normalize_ns(namespace)) {
+            self.flash_warn(PATTERN_WARNING);
+            return true;
+        }
+        false
     }
 
     /// Open the view as a fresh root, in namespace `ns` or the current one.
     pub(super) fn open_ns_resources(&mut self, ns: Option<&str>) {
+        let namespace = ns.map_or_else(|| self.namespace.clone(), str::to_string);
+        if self.ns_resources_refuses(&namespace) {
+            return;
+        }
         self.save_history_filter();
         if let Some(ns) = ns {
             self.namespace = normalize_ns(ns);
@@ -275,7 +310,7 @@ impl App {
     pub(super) fn start_ns_resources(&mut self) {
         if self.namespace_is_pattern() {
             self.store.finish_sync();
-            self.flash_warn("ns-resources counts one namespace or all namespaces, not a pattern");
+            self.flash_warn(PATTERN_WARNING);
             return;
         }
         if self.store.begin_reset() {
@@ -362,7 +397,7 @@ impl App {
         let target = self
             .cluster
             .resolve(&obj.metadata.name.clone().unwrap_or_default())
-            .filter(|k| k.ar.group == group && k.ar.plural == plural)
+            .filter(|k| k.ar.group == group && k.ar.plural == plural && k.ar.version == version)
             .unwrap_or_else(|| Kind {
                 ar: ApiResource {
                     api_version: if group.is_empty() {
@@ -527,6 +562,19 @@ mod tests {
         assert_eq!(
             count(client, &kind(), "prod").await,
             Count::Failed("the server is currently unable".into())
+        );
+    }
+
+    #[test]
+    fn discovery_warning_names_every_skipped_group() {
+        assert_eq!(discovery_warning(Vec::new()), None);
+        assert_eq!(
+            discovery_warning(vec!["a unreadable".into()]).as_deref(),
+            Some("a unreadable")
+        );
+        assert_eq!(
+            discovery_warning(vec!["a unreadable".into(), "b unreadable".into()]).as_deref(),
+            Some("2 API groups not counted: a unreadable; b unreadable")
         );
     }
 
