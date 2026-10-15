@@ -16405,6 +16405,61 @@ async fn help_opens_on_the_section_of_the_view_it_came_from() {
 }
 
 #[tokio::test]
+async fn help_lists_plugins_after_table_keys_with_the_current_kind_first() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let plugin = |name: &str, scopes: &[&str]| crate::config::Plugin {
+        name: name.into(),
+        key: "ctrl-x".into(),
+        scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    for (kind, source, expected) in [
+        ("pods", Mode::Table, ["pod-run", "any-run", "deploy-run"]),
+        (
+            "deployments",
+            Mode::Table,
+            ["deploy-run", "any-run", "pod-run"],
+        ),
+        ("pods", Mode::Logs, ["deploy-run", "pod-run", "any-run"]),
+    ] {
+        let (mut app, _rx) = test_app();
+        app.switch_kind(kind);
+        app.plugins = vec![
+            plugin("deploy-run", &["deployments"]),
+            plugin("pod-run", &["pods"]),
+            plugin("any-run", &[]),
+        ];
+        app.mode = source;
+        app.handle_key(press(KeyCode::Char('?'))).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(200, 1000)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let sections: Vec<&str> = app
+            .help_cache
+            .as_ref()
+            .unwrap()
+            .sections()
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
+        let table = sections.iter().position(|s| *s == "Keys: table").unwrap();
+        assert_eq!(sections[table + 1], "Plugins", "{sections:?}");
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        let positions = expected.map(|name| text.find(&format!("{name} (")).unwrap());
+        assert!(
+            positions.is_sorted(),
+            "{kind} from {source:?}: {expected:?} at {positions:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn help_jumps_between_sections() {
     use ratatui::{Terminal, backend::TestBackend};
 
