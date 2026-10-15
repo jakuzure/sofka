@@ -584,9 +584,12 @@ pub fn compile(
                 let rbac_group = key_lc
                     .split_once('/')
                     .is_none_or(|(group, _)| group == "rbac.authorization.k8s.io");
-                // `ns-resources` is a synthetic view; a custom resource
-                // sharing its plural is configured by its group.
-                let synthetic = plural != "ns-resources" || !key_lc.contains('/');
+                // `ns-resources` is a synthetic core view (`v1`); a custom
+                // resource sharing its plural is configured by its group.
+                let synthetic = plural != "ns-resources"
+                    || key_lc
+                        .split_once('/')
+                        .is_none_or(|(prefix, _)| prefix == "v1");
                 if BUILTIN_DRILLS.contains(&plural) && (!rbac_plural || rbac_group) && synthetic {
                     warnings.push(format!(
                         "views.\"{key}\": drill is ignored — `enter` on {plural} has a \
@@ -2183,6 +2186,7 @@ mod tests {
             warnings.iter().any(|w| w.contains("drill is ignored"))
         };
         assert!(ignored("ns-resources"));
+        assert!(ignored("v1/ns-resources"));
         assert!(!ignored("example.com/ns-resources"));
     }
 
