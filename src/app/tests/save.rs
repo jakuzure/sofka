@@ -180,3 +180,97 @@ async fn log_saves_use_save_dir() {
     assert_eq!(app.flash, format!("saved logs → {}", path.display()));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn ctrl_s_keeps_an_earlier_save_of_the_same_title() {
+    let (mut app, mut rx) = test_app();
+    let dir = save_dir("collide");
+    app.save_dir = Some(dir.display().to_string());
+    document(&mut app, Mode::Detail, "web — YAML", true);
+    app.handle_key(ctrl(KeyCode::Char('s'))).unwrap();
+    let first = finish_save(&mut app, &mut rx).await.unwrap();
+    app.detail.replace_lines(vec!["changed".to_string()].into());
+    app.handle_key(ctrl(KeyCode::Char('s'))).unwrap();
+    let second = finish_save(&mut app, &mut rx).await.unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "first\nsecond");
+    assert_eq!(std::fs::read_to_string(&second).unwrap(), "changed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_taken_save_name_gets_a_numbered_suffix() {
+    let dir = save_dir("suffix");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sofka-web-1.yaml"), "old").unwrap();
+    let dir_str = dir.display().to_string();
+
+    let path =
+        super::super::actions::write_saved(Some(&dir_str), "sofka-web-1", "yaml", "new").unwrap();
+
+    assert_eq!(path, dir.join("sofka-web-1-2.yaml"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("sofka-web-1.yaml")).unwrap(),
+        "old"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ctrl_s_saves_a_decoded_secret_readable_only_by_the_user() {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (mut app, mut rx) = test_app();
+    let dir = save_dir("secret");
+    app.save_dir = Some(dir.display().to_string());
+    app.switch_kind("secrets");
+    apply(
+        &mut app,
+        json!({"apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "creds", "namespace": "default"},
+            "type": "Opaque",
+            "data": {"greeting": BASE64.encode("decoded-value")}}),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('x'))).unwrap();
+    assert!(app.detail.title.contains("decoded"));
+
+    app.handle_key(ctrl(KeyCode::Char('s'))).unwrap();
+    let path = finish_save(&mut app, &mut rx).await.unwrap();
+
+    assert!(saved_name(&path).ends_with(".txt"));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("greeting: decoded-value")
+    );
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn ctrl_s_shortens_a_title_too_long_for_a_file_name() {
+    let (mut app, mut rx) = test_app();
+    let dir = save_dir("long");
+    app.save_dir = Some(dir.display().to_string());
+    let name = format!("{}é", "a".repeat(252));
+    document(&mut app, Mode::Detail, &format!("{name} — YAML"), true);
+
+    app.handle_key(ctrl(KeyCode::Char('s'))).unwrap();
+    let path = finish_save(&mut app, &mut rx).await.unwrap();
+
+    let file = saved_name(&path);
+    assert!(file.len() <= 255, "{} bytes", file.len());
+    assert!(
+        file.starts_with(&format!("sofka-{}", "a".repeat(200))),
+        "{file}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond");
+    std::fs::remove_dir_all(dir).unwrap();
+}

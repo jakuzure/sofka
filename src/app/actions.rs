@@ -523,14 +523,27 @@ impl App {
         let genr = self.generation;
         let tx = self.tx.clone();
         let ts = k8s_openapi::jiff::Timestamp::now().as_second();
-        let safe: String = title
+        let mut safe = String::new();
+        for c in title
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect();
-        let name = format!("sofka-{safe}-{ts}.{ext}");
+        {
+            // File names are capped at 255 bytes on common filesystems; this
+            // leaves room for the prefix, timestamp, suffix, and extension.
+            if safe.len() + c.len_utf8() > MAX_SAVE_TITLE_BYTES {
+                break;
+            }
+            safe.push(c);
+        }
+        let stem = format!("sofka-{safe}-{ts}");
+        let ext = ext.to_string();
         let save_dir = self.save_dir.clone();
         tokio::spawn(async move {
-            let result = write_saved(save_dir.as_deref(), &name, text).await;
+            let result = tokio::task::spawn_blocking(move || {
+                write_saved(save_dir.as_deref(), &stem, &ext, &text)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
             let _ = tx
                 .send(Msg::Saved {
                     generation: genr,
@@ -3175,18 +3188,31 @@ async fn run_helm(argv: &[String]) -> std::result::Result<(), String> {
     }
 }
 
-async fn write_saved(
+const MAX_SAVE_TITLE_BYTES: usize = 200;
+
+/// Saves can hold Secret values, so the file is private to this user, and a
+/// name already taken (the same title saved within one second) gets a `-N`
+/// suffix instead of being overwritten.
+pub(super) fn write_saved(
     save_dir: Option<&str>,
-    name: &str,
-    text: String,
+    stem: &str,
+    ext: &str,
+    text: &str,
 ) -> Result<std::path::PathBuf, String> {
     let dir = crate::config::save_dir(save_dir)?;
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let path = dir.join(name);
-    tokio::fs::write(&path, text)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(path)
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    for n in 1..=100 {
+        let name = if n == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem}-{n}.{ext}")
+        };
+        let path = dir.join(name);
+        match super::secret_edit::create_private(&path, text) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err(format!("no free file name for {stem}.{ext}"))
 }

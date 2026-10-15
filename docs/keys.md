@@ -214,7 +214,10 @@ position. `managedFields` are included only after `m` shows them, and a Helm
 row saves the rendered manifest or values it shows. The file goes to
 [`save_dir`](configuration.md#base-options), the temp directory by default, as
 `sofka-<view title>-<unix time>.yaml` for YAML and diff views and `.txt` for
-the others. The write happens off the UI thread; the status line shows the path,
+the others. The file is readable only by your user, since a document can hold
+Secret values, and a name that is already taken gets a `-2`, `-3`, … suffix
+instead of replacing the earlier save. Log saves follow the same rules. The
+write happens off the UI thread; the status line shows the path,
 or the error if the directory cannot be created or the file cannot be written.
 An empty document is not saved.
 
