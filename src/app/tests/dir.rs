@@ -539,6 +539,32 @@ async fn dir_refuses_a_kind_it_cannot_match_against_guardrails() {
     assert!(app.flash.contains("NetworkPolicy"), "{}", app.flash);
 }
 
+#[tokio::test]
+async fn dir_refuses_a_namespaced_object_rendered_without_a_namespace() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    let bare = json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "web"}});
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(root.join("web.yaml"), &[bare], None),
+    );
+    assert!(app.confirm_action.is_none());
+    assert!(app.flash.contains("without a namespace"), "{}", app.flash);
+
+    // A cluster-scoped object has none, and that is fine.
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    let ns = json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "web"}});
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(root.join("web.yaml"), &[ns], None),
+    );
+    assert_eq!(app.mode, Mode::Confirm);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn dir_skips_a_fifo_with_a_manifest_name() {
@@ -625,4 +651,39 @@ fn manifest_summary_names_the_first_object() {
         manifest_summary("apply", "x", ""),
         "applied x: nothing to do"
     );
+}
+
+/// The kubectl contract `:dir` relies on, checked against a real cluster with
+/// dry runs only: a client-side render fills in the context's default
+/// namespace for a namespaced object and leaves a cluster-scoped one empty,
+/// and `kubectl diff -f -` reads the rendered `List` from stdin.
+/// `SOFKA_TEST_KUBE_CONTEXT=<context> cargo test e2e_dir -- --ignored`
+#[tokio::test]
+#[ignore]
+async fn e2e_dir_render_and_diff_contract() {
+    let context =
+        std::env::var("SOFKA_TEST_KUBE_CONTEXT").expect("SOFKA_TEST_KUBE_CONTEXT not set");
+    let root = manifests();
+    let source = root.join("contract.yaml");
+    std::fs::write(
+        &source,
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sofka-dir-contract\n---\n\
+         apiVersion: v1\nkind: Namespace\nmetadata:\n  name: sofka-dir-contract\n",
+    )
+    .unwrap();
+    let base: Vec<std::ffi::OsString> = ["kubectl", "--context", &context]
+        .map(std::ffi::OsString::from)
+        .to_vec();
+    let plan = crate::app::dir::plan(base, DirVerb::Apply, source, DirEntryKind::Manifest)
+        .await
+        .expect("render and diff");
+    let configmap = plan.objects.iter().find(|o| o.kind == "ConfigMap").unwrap();
+    assert!(
+        !configmap.namespace.is_empty(),
+        "namespace was not defaulted"
+    );
+    let namespace = plan.objects.iter().find(|o| o.kind == "Namespace").unwrap();
+    assert!(namespace.namespace.is_empty());
+    let diff = plan.diff.expect("an apply plan carries a diff");
+    assert!(diff.contains("sofka-dir-contract"), "{diff}");
 }

@@ -277,7 +277,7 @@ pub(super) fn rendered_objects(
 
 /// Render `source` with a client-side dry run, snapshot it in memory, and
 /// (for an apply) diff the snapshot against the cluster.
-async fn plan(
+pub(super) async fn plan(
     base: Vec<OsString>,
     verb: DirVerb,
     path: PathBuf,
@@ -570,6 +570,17 @@ impl App {
                 ));
                 return;
             };
+            // kubectl's builder defaults the namespace of every namespaced
+            // object it renders (`DefaultNamespace()` → `SetNamespace`). If
+            // one still arrives without it, a namespace-scoped guardrail
+            // would not see it, so refuse instead of trusting that.
+            if kind.namespaced && o.namespace.is_empty() {
+                self.flash_warn(&format!(
+                    "can't check guardrails: {} {} rendered without a namespace",
+                    o.kind, o.name
+                ));
+                return;
+            }
             let plural = kind.ar.plural.to_lowercase();
             groups
                 .entry(plural)
