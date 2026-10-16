@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::dir::{
-    DirEntryKind, manifest_source, manifest_summary, preview_lines, resolve_dir_arg,
+    DirEntryKind, DirPlan, DirVerb, ManifestSnapshot, RenderedObject, manifest_source,
+    manifest_summary, preview_lines, rendered_objects, resolve_dir_arg,
 };
 use std::path::{Path, PathBuf};
 
@@ -13,9 +14,24 @@ diff -u -N /tmp/LIVE-1/v1.ConfigMap.default.web /tmp/MERGED-2/v1.ConfigMap.defau
 +  hello: there
 ";
 
-/// A scratch tree: `app/` (plain), `kust/` (kustomization), `web.yaml`, plus
-/// a hidden manifest and a README the browser must skip.
-fn manifests() -> PathBuf {
+/// A scratch tree, removed on drop: `app/` (plain), `kust/` (kustomization),
+/// `web.yaml`, plus a hidden manifest and a README the browser must skip.
+struct Tree(PathBuf);
+
+impl std::ops::Deref for Tree {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn manifests() -> Tree {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "sofka-dir-test-{}-{}",
@@ -33,7 +49,7 @@ fn manifests() -> PathBuf {
     .unwrap();
     std::fs::write(root.join(".hidden.yaml"), "").unwrap();
     std::fs::write(root.join("README.md"), "").unwrap();
-    std::fs::canonicalize(root).unwrap()
+    Tree(std::fs::canonicalize(root).unwrap())
 }
 
 fn type_command(app: &mut App, cmd: &str) {
@@ -66,7 +82,7 @@ async fn dir_lists_folders_first_and_only_manifests() {
     type_command(&mut app, &format!("dir {}", root.display()));
 
     assert_eq!(app.mode, Mode::Dir);
-    assert_eq!(app.dir.path, root);
+    assert_eq!(app.dir.path, root.0);
     assert_eq!(
         names(&app),
         [
@@ -89,7 +105,7 @@ async fn dir_enters_folders_and_backspace_returns_to_the_folder_left() {
     assert_eq!(names(&app), [("cm.yml", DirEntryKind::Manifest)]);
 
     app.handle_key(press(KeyCode::Backspace)).unwrap();
-    assert_eq!(app.dir.path, root);
+    assert_eq!(app.dir.path, root.0);
     assert_eq!(app.dir.state.selected(), Some(0));
 
     app.handle_key(press(KeyCode::Esc)).unwrap();
@@ -123,28 +139,75 @@ async fn dir_rejects_a_path_that_is_not_a_directory() {
     assert!(app.flash.contains("not a directory"), "{}", app.flash);
 }
 
-#[tokio::test]
-async fn dir_apply_previews_the_diff_then_confirms_from_the_listing() {
-    let root = manifests();
-    let (mut app, _rx) = test_app();
+fn configmap(name: &str, ns: &str) -> serde_json::Value {
+    json!({"apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": name, "namespace": ns}, "data": {"hello": "there"}})
+}
+
+/// What the off-thread render of `path` would hand back: `objects` written to
+/// a private snapshot, plus a diff for an apply.
+fn plan(path: PathBuf, objects: &[serde_json::Value], diff: Option<&str>) -> DirPlan {
+    DirPlan {
+        path,
+        snapshot: ManifestSnapshot::write(objects).unwrap(),
+        objects: objects
+            .iter()
+            .map(|o| RenderedObject {
+                api_version: o["apiVersion"].as_str().unwrap().into(),
+                kind: o["kind"].as_str().unwrap().into(),
+                name: o["metadata"]["name"].as_str().unwrap().into(),
+                namespace: o["metadata"]["namespace"].as_str().unwrap_or("").into(),
+            })
+            .collect(),
+        diff: diff.map(String::from),
+    }
+}
+
+fn deliver(app: &mut App, request: u64, verb: DirVerb, plan: DirPlan) {
+    app.handle_msg(Msg::DirPlan {
+        generation: app.generation,
+        claim: current_claim(app),
+        request,
+        verb,
+        path: plan.path.clone(),
+        result: Box::new(Ok(plan)),
+    });
+}
+
+/// Open the browser on `web.yaml` and press `key`, returning the request the
+/// render was started under.
+fn start(root: &Path, key: KeyEvent) -> (App, Receiver<Msg>, u64) {
+    let (mut app, rx) = test_app();
+    app.cluster
+        .register_kind("", "ConfigMap", "configmaps", true);
     type_command(&mut app, &format!("dir {}", root.display()));
     select(&mut app, "web.yaml");
+    app.handle_key(key).unwrap();
+    let request = app.dir.request;
+    (app, rx, request)
+}
 
-    app.handle_key(press(KeyCode::Char('a'))).unwrap();
+#[tokio::test]
+async fn dir_apply_previews_the_diff_then_confirms_the_snapshot() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('a')));
     assert_eq!(app.mode, Mode::Dir);
     assert!(app.flash.starts_with("diffing"), "{}", app.flash);
 
-    app.handle_msg(Msg::DirPreview {
-        generation: app.generation,
-        claim: current_claim(&app),
-        path: root.join("web.yaml"),
-        kind: DirEntryKind::Manifest,
-        result: Ok(Some(DIFF.into())),
-    });
+    let web = root.join("web.yaml");
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Apply,
+        plan(web.clone(), &[configmap("web", "default")], Some(DIFF)),
+    );
     assert_eq!(app.mode, Mode::Diff);
     assert_eq!(app.detail.lines[0], "── v1.ConfigMap.default.web");
     assert!(!app.detail.lines.iter().any(|l| l.starts_with("+++")));
 
+    // Editing the source after the preview changes nothing: the confirmed
+    // action carries the rendered snapshot, not the path.
+    std::fs::write(&web, "kind: ConfigMap\nmetadata:\n  name: other\n").unwrap();
     app.handle_key(press(KeyCode::Char('a'))).unwrap();
     assert_eq!(app.mode, Mode::Confirm);
     assert!(
@@ -152,50 +215,102 @@ async fn dir_apply_previews_the_diff_then_confirms_from_the_listing() {
         "{}",
         app.confirm_label
     );
-    assert!(matches!(
-        app.confirm_action,
-        Some(ConfirmAction::ManifestApply { ref path, kind: DirEntryKind::Manifest })
-            if *path == root.join("web.yaml")
-    ));
+    assert!(
+        app.confirm_label.contains("(1 object)"),
+        "{}",
+        app.confirm_label
+    );
+    let snapshot = match &app.confirm_action {
+        Some(ConfirmAction::Manifest {
+            verb: DirVerb::Apply,
+            plan,
+        }) => plan.snapshot.file.clone(),
+        _ => panic!("expected a manifest apply"),
+    };
+    let rendered = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(rendered.contains("\"web\""), "{rendered}");
+    assert!(!rendered.contains("other"), "{rendered}");
 
+    // Cancelling returns to the listing and removes the snapshot.
     app.handle_key(press(KeyCode::Esc)).unwrap();
     assert_eq!(app.mode, Mode::Dir);
     assert!(app.confirm_action.is_none());
+    assert!(!snapshot.exists());
 }
 
 #[tokio::test]
 async fn dir_apply_with_no_changes_stays_in_the_listing() {
     let root = manifests();
-    let (mut app, _rx) = test_app();
-    type_command(&mut app, &format!("dir {}", root.display()));
-    select(&mut app, "web.yaml");
-    app.handle_key(press(KeyCode::Char('a'))).unwrap();
-
-    app.handle_msg(Msg::DirPreview {
-        generation: app.generation,
-        claim: current_claim(&app),
-        path: root.join("web.yaml"),
-        kind: DirEntryKind::Manifest,
-        result: Ok(None),
-    });
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('a')));
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Apply,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "default")],
+            Some(""),
+        ),
+    );
     assert_eq!(app.mode, Mode::Dir);
     assert!(app.flash.starts_with("no changes"), "{}", app.flash);
 }
 
 #[tokio::test]
+async fn dir_drops_a_diff_for_an_earlier_selection() {
+    let root = manifests();
+    let (mut app, _rx, first) = start(&root, press(KeyCode::Char('a')));
+
+    // Another row is diffed before the first result lands.
+    select(&mut app, "kust");
+    app.handle_key(press(KeyCode::Char('a'))).unwrap();
+    let second = app.dir.request;
+    assert_ne!(first, second);
+
+    deliver(
+        &mut app,
+        first,
+        DirVerb::Apply,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "default")],
+            Some(DIFF),
+        ),
+    );
+    assert_eq!(app.mode, Mode::Dir);
+    assert!(app.dir.preview.is_none());
+
+    deliver(
+        &mut app,
+        second,
+        DirVerb::Apply,
+        plan(
+            root.join("kust"),
+            &[configmap("kust", "default")],
+            Some(DIFF),
+        ),
+    );
+    assert_eq!(app.mode, Mode::Diff);
+    assert_eq!(
+        app.dir.preview.as_ref().map(|p| p.path.clone()),
+        Some(root.join("kust"))
+    );
+}
+
+#[tokio::test]
 async fn dir_leaving_the_preview_drops_the_pending_apply() {
     let root = manifests();
-    let (mut app, _rx) = test_app();
-    type_command(&mut app, &format!("dir {}", root.display()));
-    select(&mut app, "web.yaml");
-    app.handle_key(press(KeyCode::Char('a'))).unwrap();
-    app.handle_msg(Msg::DirPreview {
-        generation: app.generation,
-        claim: current_claim(&app),
-        path: root.join("web.yaml"),
-        kind: DirEntryKind::Manifest,
-        result: Ok(Some(DIFF.into())),
-    });
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('a')));
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Apply,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "default")],
+            Some(DIFF),
+        ),
+    );
 
     app.handle_key(press(KeyCode::Esc)).unwrap();
     assert_eq!(app.mode, Mode::Dir);
@@ -210,19 +325,31 @@ async fn dir_leaving_the_preview_drops_the_pending_apply() {
 }
 
 #[tokio::test]
-async fn dir_delete_confirms_with_the_kustomization() {
+async fn dir_delete_confirms_every_rendered_object() {
     let root = manifests();
-    let (mut app, _rx) = test_app();
-    type_command(&mut app, &format!("dir {}", root.display()));
-    select(&mut app, "kust");
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    assert_eq!(app.mode, Mode::Dir);
 
-    app.handle_key(press(KeyCode::Char('d'))).unwrap();
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("a", "default"), configmap("b", "default")],
+            None,
+        ),
+    );
     assert_eq!(app.mode, Mode::Confirm);
-    assert!(app.confirm_label.starts_with("Delete the resources in "));
+    assert!(
+        app.confirm_label.starts_with("Delete the 2 objects in "),
+        "{}",
+        app.confirm_label
+    );
     assert!(matches!(
         app.confirm_action,
-        Some(ConfirmAction::ManifestDelete {
-            kind: DirEntryKind::Kustomization,
+        Some(ConfirmAction::Manifest {
+            verb: DirVerb::Delete,
             ..
         })
     ));
@@ -241,36 +368,106 @@ async fn dir_readonly_blocks_apply_and_delete() {
     app.handle_key(press(KeyCode::Char('a'))).unwrap();
     assert!(app.flash.starts_with("read-only"), "{}", app.flash);
     app.handle_key(press(KeyCode::Char('d'))).unwrap();
+    assert!(app.flash.starts_with("read-only"), "{}", app.flash);
     assert_eq!(app.mode, Mode::Dir);
-    assert!(app.confirm_action.is_none());
+}
+
+fn guardrail(app: &mut App, toml: &str) {
+    app.guardrails = toml::from_str::<crate::config::Config>(toml)
+        .unwrap()
+        .guardrails;
 }
 
 #[tokio::test]
-async fn dir_guardrail_denies_apply() {
+async fn dir_namespace_guardrails_match_the_rendered_objects() {
     let root = manifests();
-    let (mut app, _rx) = test_app();
-    app.guardrails = toml::from_str::<crate::config::Config>(
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    guardrail(
+        &mut app,
+        r#"
+        [[guardrails]]
+        actions = ["delete"]
+        resources = ["configmaps"]
+        namespaces = ["prod"]
+        deny = true
+        "#,
+    );
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("a", "dev"), configmap("b", "prod")],
+            None,
+        ),
+    );
+    assert!(app.confirm_action.is_none());
+    assert!(app.flash.contains("blocked by guardrail"), "{}", app.flash);
+}
+
+#[tokio::test]
+async fn dir_guardrail_confirmation_applies_to_apply() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('a')));
+    guardrail(
+        &mut app,
         r#"
         [[guardrails]]
         actions = ["apply"]
-        deny = true
+        namespaces = ["prod"]
+        confirmation = "type-resource-name"
         "#,
-    )
-    .unwrap()
-    .guardrails;
+    );
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Apply,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "prod")],
+            Some(DIFF),
+        ),
+    );
+    app.handle_key(press(KeyCode::Char('a'))).unwrap();
+    assert_eq!(app.mode, Mode::Prompt);
+    assert!(app.prompt_label.contains("'web'"), "{}", app.prompt_label);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dir_skips_a_fifo_with_a_manifest_name() {
+    let root = manifests();
+    let fifo = std::ffi::CString::new(root.join("pipe.yaml").to_string_lossy().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let (mut app, _rx) = test_app();
     type_command(&mut app, &format!("dir {}", root.display()));
-    select(&mut app, "web.yaml");
-    app.handle_key(press(KeyCode::Char('a'))).unwrap();
-    app.handle_msg(Msg::DirPreview {
-        generation: app.generation,
-        claim: current_claim(&app),
-        path: root.join("web.yaml"),
-        kind: DirEntryKind::Manifest,
-        result: Ok(Some(DIFF.into())),
-    });
-    app.handle_key(press(KeyCode::Char('a'))).unwrap();
-    assert!(app.confirm_action.is_none());
-    assert!(app.flash.contains("blocked by guardrail"), "{}", app.flash);
+    assert!(!names(&app).iter().any(|(n, _)| *n == "pipe.yaml"));
+}
+
+#[test]
+fn rendered_objects_unwrap_lists_and_drop_the_last_applied_annotation() {
+    let list = json!({"apiVersion": "v1", "kind": "List", "items": [
+        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a", "namespace": "home",
+            "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}"}}},
+        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "zz"}},
+    ]});
+    let (items, objects) = rendered_objects(&list.to_string()).unwrap();
+    assert!(items[0]["metadata"].get("annotations").is_none());
+    assert_eq!(objects[0].namespace, "home");
+    assert_eq!(objects[1].namespace, "");
+    assert_eq!(objects[1].kind, "Namespace");
+
+    let single = json!({"apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "x"}});
+    let (items, objects) = rendered_objects(&single.to_string()).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(objects[0].api_version, "apps/v1");
+
+    let empty = json!({"apiVersion": "v1", "kind": "List", "items": []});
+    assert!(rendered_objects(&empty.to_string()).is_err());
 }
 
 #[test]

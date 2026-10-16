@@ -1120,23 +1120,32 @@ pod is rejected; browse through a pod that already mounts the claim instead.
 your repository is one keystroke from the cluster you are looking at. Without
 a path it opens the directory sofka was started from; `~` and relative paths
 work. Only folders and `.yaml`, `.yml`, and `.json` files are listed, folders
-first, and hidden entries are skipped. A folder with a `kustomization.yaml`,
-`kustomization.yml`, or `Kustomization` file is marked `kustomize`.
+first. Hidden entries and anything that is neither a regular file nor a
+folder, such as a named pipe called `x.yaml`, are skipped. A folder with a
+`kustomization.yaml`, `kustomization.yml`, or `Kustomization` file is marked
+`kustomize`.
 
 - **`enter`** opens a folder, or shows a manifest as a read-only document.
 - **`e`** opens the manifest in `$KUBE_EDITOR` or `$EDITOR`, suspending the TUI.
-- **`a`** runs `kubectl diff` and shows the result. Nothing is applied until
-  you press `a` again in that diff and confirm. When nothing would change, the
+- **`a`** shows a `kubectl diff` of the selection. Nothing is applied until you
+  press `a` again in that diff and confirm. When nothing would change, the
   status line says so and no diff opens.
-- **`d`** runs `kubectl delete --ignore-not-found` for what the selection
-  describes, after confirmation.
+- **`d`** deletes the objects the selection describes, with
+  `--ignore-not-found`, after confirmation.
 
-A manifest is passed with `-f`, a folder with `-f <folder> -R`, and a
-kustomization with `-k`. Every command is pinned to the current context with
-`--context`. Objects without a namespace go to the kubeconfig context's
-default namespace, as with a plain `kubectl apply`. Apply and delete are
-blocked in read-only mode and match the `apply` and `delete` guardrails against
-`manifests`. Both are recorded in `:journal`.
+Both start by rendering the selection once with
+`kubectl apply --dry-run=client -o json`: a manifest with `-f`, a folder with
+`-f <folder> -R`, and a kustomization with `-k`. The rendered objects go to a
+private temporary file, and the diff, the apply, and the delete all read that
+file. An edit made after the diff opened is not applied; press `a` again to see
+it. The file is removed when the action finishes or is cancelled.
+
+Rendering fills in each object's namespace, using the context's default for
+objects without one. Guardrails match the `apply` and `delete` actions against
+every rendered object's resource and namespace, like the same action on a table
+row, and a folder counts as a bulk action for `max_bulk`. Every command is
+pinned to the current context with `--context`. Apply and delete are blocked in
+read-only mode and recorded in `:journal`.
 
 ## Safety
 

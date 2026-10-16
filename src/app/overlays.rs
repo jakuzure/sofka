@@ -179,8 +179,7 @@ impl App {
                 self.do_helm_uninstall(targets);
                 self.clear_marks();
             }
-            ConfirmAction::ManifestApply { path, kind } => self.do_manifest("apply", path, kind),
-            ConfirmAction::ManifestDelete { path, kind } => self.do_manifest("delete", path, kind),
+            ConfirmAction::Manifest { verb, plan } => self.do_manifest(verb, plan),
             ConfirmAction::NodeDebug {
                 node,
                 image,

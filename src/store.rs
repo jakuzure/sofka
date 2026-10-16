@@ -458,14 +458,15 @@ pub enum Msg {
         generation: u64,
         row: Box<crate::fleet::FleetRow>,
     },
-    /// A `kubectl diff` preview for `:dir` apply: `None` when nothing would
-    /// change.
-    DirPreview {
+    /// A `:dir` selection rendered for apply (with its diff) or delete.
+    DirPlan {
         generation: u64,
         claim: StatusClaim,
+        /// Matched against the browser's current request; older ones drop.
+        request: u64,
+        verb: crate::app::dir::DirVerb,
         path: std::path::PathBuf,
-        kind: crate::app::dir::DirEntryKind,
-        result: Result<Option<String>, String>,
+        result: Box<Result<crate::app::dir::DirPlan, String>>,
     },
     /// Results of a `:find <text>` sweep across kinds.
     FindResults {

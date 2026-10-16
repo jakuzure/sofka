@@ -1,8 +1,13 @@
 //! `:dir [path]` — browse local manifests and apply or delete them against the
 //! current context. Apply always goes through a `kubectl diff` preview first.
+//!
+//! The selection is rendered once with a client-side dry run into a private
+//! snapshot. The diff, the guardrails, and the apply or delete all use that
+//! snapshot, so an edit made after the preview is never applied unseen.
 
 use super::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// File names that make a directory a kustomization, so it is applied with
@@ -38,8 +43,80 @@ pub struct DirBrowser {
     pub path: PathBuf,
     pub entries: Vec<DirEntry>,
     pub state: ListState,
-    /// The manifest whose apply preview is open in the diff view.
-    pub preview: Option<(PathBuf, DirEntryKind)>,
+    /// The plan whose apply preview is open in the diff view.
+    pub preview: Option<DirPlan>,
+    /// Bumped by every render request and every listing change, so a result
+    /// for an earlier selection is dropped instead of opening.
+    pub request: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirVerb {
+    Apply,
+    Delete,
+}
+
+impl DirVerb {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+/// One object from a rendered source, with its effective namespace (empty
+/// for a cluster-scoped object).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedObject {
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
+    pub namespace: String,
+}
+
+/// The rendered objects in a private directory, removed when dropped.
+pub struct ManifestSnapshot {
+    dir: PathBuf,
+    pub file: PathBuf,
+}
+
+impl ManifestSnapshot {
+    /// Write `items` as a `List` only this user can read.
+    pub fn write(items: &[serde_json::Value]) -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "sofka-dir-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&dir)?;
+        let snapshot = Self {
+            file: dir.join("manifest.json"),
+            dir,
+        };
+        let list = serde_json::json!({"apiVersion": "v1", "kind": "List", "items": items});
+        secret_edit::create_private(&snapshot.file, &list.to_string())?;
+        Ok(snapshot)
+    }
+}
+
+impl Drop for ManifestSnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A rendered selection, ready to diff, guard, and run.
+pub struct DirPlan {
+    pub path: PathBuf,
+    pub snapshot: ManifestSnapshot,
+    pub objects: Vec<RenderedObject>,
+    /// `kubectl diff` output for an apply; `None` for a delete.
+    pub diff: Option<String>,
 }
 
 impl DirBrowser {
@@ -71,7 +148,7 @@ pub(super) fn read_manifest_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
             } else {
                 DirEntryKind::Dir
             }
-        } else if is_manifest(&name) {
+        } else if meta.is_file() && is_manifest(&name) {
             DirEntryKind::Manifest
         } else {
             continue;
@@ -161,6 +238,96 @@ async fn run_kubectl(argv: Vec<String>) -> Result<KubectlOutput, String> {
     }
 }
 
+/// The objects of a client-side dry run (`-o json`: one object, or a `List`
+/// of several), without the last-applied annotation the dry run adds.
+pub(super) fn rendered_objects(
+    json: &str,
+) -> Result<(Vec<serde_json::Value>, Vec<RenderedObject>), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("unreadable dry-run output: {e}"))?;
+    let mut items = match value.get("kind").and_then(|k| k.as_str()) {
+        Some("List") => value
+            .get("items")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => vec![value],
+    };
+    let mut objects = Vec::with_capacity(items.len());
+    for item in &mut items {
+        if let Some(annotations) = item
+            .pointer_mut("/metadata/annotations")
+            .and_then(|a| a.as_object_mut())
+        {
+            annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
+            if annotations.is_empty()
+                && let Some(meta) = item
+                    .pointer_mut("/metadata")
+                    .and_then(|m| m.as_object_mut())
+            {
+                meta.remove("annotations");
+            }
+        }
+        let field = |p: &str| {
+            item.pointer(p)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        objects.push(RenderedObject {
+            api_version: field("/apiVersion"),
+            kind: field("/kind"),
+            name: field("/metadata/name"),
+            namespace: field("/metadata/namespace"),
+        });
+    }
+    if items.is_empty() {
+        return Err("no objects to apply".into());
+    }
+    Ok((items, objects))
+}
+
+/// Render `source` with a client-side dry run, snapshot it, and (for an
+/// apply) diff the snapshot against the cluster.
+async fn plan(
+    base: Vec<String>,
+    verb: DirVerb,
+    path: PathBuf,
+    kind: DirEntryKind,
+) -> Result<DirPlan, String> {
+    let mut render = base.clone();
+    render.extend(["apply", "--dry-run=client", "-o", "json"].map(String::from));
+    render.extend(manifest_source(&path, kind));
+    let out = run_kubectl(render).await?;
+    if out.code != Some(0) {
+        return Err(out.error());
+    }
+    let (items, objects) = rendered_objects(&out.stdout)?;
+    let snapshot = ManifestSnapshot::write(&items).map_err(|e| format!("snapshot failed: {e}"))?;
+    let diff = match verb {
+        DirVerb::Delete => None,
+        DirVerb::Apply => {
+            let mut argv = base;
+            argv.extend(["diff".to_string(), "-f".to_string()]);
+            argv.push(snapshot.file.to_string_lossy().into_owned());
+            // `kubectl diff` exits 0 when nothing would change and 1 when
+            // something would; anything else is an error.
+            let out = run_kubectl(argv).await?;
+            match out.code {
+                Some(0) => Some(String::new()),
+                Some(1) if !out.stdout.trim().is_empty() => Some(out.stdout),
+                _ => return Err(out.error()),
+            }
+        }
+    };
+    Ok(DirPlan {
+        path,
+        snapshot,
+        objects,
+        diff,
+    })
+}
+
 impl App {
     /// `:dir [path]` — open the manifest browser at `path`.
     pub(super) fn open_dir(&mut self, arg: &str) {
@@ -189,6 +356,7 @@ impl App {
                 self.dir
                     .state
                     .select((!self.dir.entries.is_empty()).then_some(at));
+                self.dir.request += 1;
                 true
             }
             Err(e) => {
@@ -200,6 +368,7 @@ impl App {
 
     pub(super) fn key_dir(&mut self, key: KeyInput) {
         let len = self.dir.entries.len();
+        let before = self.dir.state.selected();
         match key.action {
             Some(Action::Back | Action::Close) => self.mode = Mode::Table,
             Some(Action::Down) => list_step(&mut self.dir.state, len, true),
@@ -225,9 +394,13 @@ impl App {
                 self.load_dir(self.dir.path.clone(), keep.as_deref());
             }
             Some(Action::Edit) => self.dir_edit(),
-            Some(Action::Apply) => self.dir_preview_apply(),
-            Some(Action::Delete) => self.dir_request_delete(),
+            Some(Action::Apply) => self.dir_plan(DirVerb::Apply),
+            Some(Action::Delete) => self.dir_plan(DirVerb::Delete),
             _ => {}
+        }
+        // A render started for another row must not open for this one.
+        if self.dir.state.selected() != before {
+            self.dir.request += 1;
         }
     }
 
@@ -285,160 +458,185 @@ impl App {
         )));
     }
 
-    /// `a` — diff the selection against the cluster. The apply itself is
-    /// offered from the diff view.
-    fn dir_preview_apply(&mut self) {
+    /// `a` / `d` — render the selection off-thread. An apply opens its diff
+    /// when it arrives; a delete goes straight to its guardrails and dialog.
+    fn dir_plan(&mut self, verb: DirVerb) {
         if self.deny_readonly() {
             return;
         }
         let Some((path, kind)) = self.dir.selected_path() else {
             return;
         };
-        let mut argv = self.kubectl_base();
-        argv.push("diff".into());
-        argv.extend(manifest_source(&path, kind));
-        let claim = self.claim_status(format!("diffing {}…", display_path(&path)));
+        self.dir.request += 1;
+        let request = self.dir.request;
+        let doing = match verb {
+            DirVerb::Apply => "diffing",
+            DirVerb::Delete => "reading",
+        };
+        let claim = self.claim_status(format!("{doing} {}…", display_path(&path)));
+        let base = self.kubectl_base();
         let tx = self.tx.clone();
         let genr = self.generation;
         tokio::spawn(async move {
-            // `kubectl diff` exits 0 when nothing would change and 1 when
-            // something would; anything else is an error.
-            let result = run_kubectl(argv).await.and_then(|out| match out.code {
-                Some(0) => Ok(None),
-                Some(1) if !out.stdout.trim().is_empty() => Ok(Some(out.stdout)),
-                _ => Err(out.error()),
-            });
+            let result = plan(base, verb, path.clone(), kind).await;
             let _ = tx
-                .send(Msg::DirPreview {
+                .send(Msg::DirPlan {
                     generation: genr,
                     claim,
+                    request,
+                    verb,
                     path,
-                    kind,
-                    result,
+                    result: Box::new(result),
                 })
                 .await;
         });
     }
 
-    pub(super) fn finish_dir_preview(
+    pub(super) fn finish_dir_plan(
         &mut self,
         claim: StatusClaim,
+        request: u64,
+        verb: DirVerb,
         path: PathBuf,
-        kind: DirEntryKind,
-        result: Result<Option<String>, String>,
+        result: Result<DirPlan, String>,
     ) {
-        match result {
-            Err(e) => self.set_claimed_status(
-                claim,
-                format!("diff {} failed: {e}", display_path(&path)),
-                true,
-            ),
-            Ok(None) => self.set_claimed_status(
-                claim,
-                format!("no changes: {} matches the cluster", display_path(&path)),
-                false,
-            ),
-            Ok(Some(text)) => {
+        // Superseded by a later request, or the browser was left: the result
+        // belongs to a selection that is no longer on screen.
+        if request != self.dir.request || self.mode != Mode::Dir {
+            return;
+        }
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.set_claimed_status(
+                    claim,
+                    format!("{} {} failed: {e}", verb.name(), display_path(&path)),
+                    true,
+                );
+                return;
+            }
+        };
+        match verb {
+            DirVerb::Delete => {
+                self.set_claimed_status(claim, String::new(), false);
+                self.dir_confirm(verb, plan);
+            }
+            DirVerb::Apply => {
+                let diff = plan.diff.clone().unwrap_or_default();
+                if diff.is_empty() {
+                    self.set_claimed_status(
+                        claim,
+                        format!("no changes: {} matches the cluster", display_path(&path)),
+                        false,
+                    );
+                    return;
+                }
                 let apply = self.keymap.first_label("diff", Action::Apply).to_string();
                 self.set_claimed_status(
                     claim,
                     format!("review the diff, {apply} applies it"),
                     false,
                 );
-                // A diff that arrives after the browser was left is dropped:
-                // the apply belongs to the view it was asked from.
-                if self.mode != Mode::Dir {
-                    return;
-                }
                 self.detail = Scrollable {
                     wrap: self.detail.wrap,
                     title: format!("apply preview ({apply} to apply) · {}", display_path(&path)),
-                    lines: preview_lines(&text).into(),
+                    lines: preview_lines(&diff).into(),
                     ..Default::default()
                 };
-                self.dir.preview = Some((path, kind));
+                self.dir.preview = Some(plan);
                 self.return_mode = Mode::Dir;
                 self.mode = Mode::Diff;
             }
         }
     }
 
-    /// `a` in an apply preview — confirm and apply.
+    /// `a` in an apply preview — confirm and apply the previewed snapshot.
     pub(super) fn dir_request_apply(&mut self) {
-        let Some((path, kind)) = self.dir.preview.clone() else {
-            return;
-        };
-        if self.deny_readonly() {
+        if self.dir.preview.is_none() || self.deny_readonly() {
             return;
         }
-        let targets = vec![(path.display().to_string(), String::new())];
-        let Some(level) = self.guard("apply", "manifests", &targets, ConfirmLevel::Plain) else {
+        let Some(plan) = self.dir.preview.take() else {
             return;
         };
-        self.dir.preview = None;
         self.mode = Mode::Dir;
-        let label = format!("Apply {} to {}?", display_path(&path), self.cluster.context);
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.begin_guarded(
-            ConfirmAction::ManifestApply { path, kind },
-            label,
-            level,
-            name,
-        );
+        self.dir_confirm(DirVerb::Apply, plan);
     }
 
-    fn dir_request_delete(&mut self) {
-        if self.deny_readonly() {
-            return;
+    /// Check the guardrails for every rendered object, by its own resource
+    /// and namespace, then open the confirmation.
+    fn dir_confirm(&mut self, verb: DirVerb, plan: DirPlan) {
+        let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for o in &plan.objects {
+            let group = o.api_version.rsplit_once('/').map_or("", |(g, _)| g);
+            let plural = self
+                .cluster
+                .resolve_in_group(&o.kind, group)
+                .map(|k| k.ar.plural.to_lowercase())
+                // Not discovered (yet): the conventional plural.
+                .unwrap_or_else(|| format!("{}s", o.kind.to_lowercase()));
+            groups
+                .entry(plural)
+                .or_default()
+                .push((o.name.clone(), o.namespace.clone()));
         }
-        let Some((path, kind)) = self.dir.selected_path() else {
-            return;
+        let mut level = ConfirmLevel::Plain;
+        for (plural, targets) in &groups {
+            match self.guard(verb.name(), plural, targets, ConfirmLevel::Plain) {
+                Some(l) => level = level.max(l),
+                None => return,
+            }
+        }
+        let shown = display_path(&plan.path);
+        let count = plan.objects.len();
+        let objects = if count == 1 {
+            "1 object".to_string()
+        } else {
+            format!("{count} objects")
         };
-        let targets = vec![(path.display().to_string(), String::new())];
-        let Some(level) = self.guard("delete", "manifests", &targets, ConfirmLevel::Plain) else {
-            return;
+        let label = match verb {
+            DirVerb::Apply => format!("Apply {shown} ({objects}) to {}?", self.cluster.context),
+            DirVerb::Delete => format!(
+                "Delete the {objects} in {shown} from {}?",
+                self.cluster.context
+            ),
         };
-        let label = format!(
-            "Delete the resources in {} from {}?",
-            display_path(&path),
-            self.cluster.context
-        );
-        let name = self
-            .dir
-            .selected()
-            .map(|e| e.name.clone())
-            .unwrap_or_default();
+        let name_hint = match plan.objects.as_slice() {
+            [one] => one.name.clone(),
+            _ => count.to_string(),
+        };
         self.begin_guarded(
-            ConfirmAction::ManifestDelete { path, kind },
+            ConfirmAction::Manifest { verb, plan },
             label,
             level,
-            name,
+            name_hint,
         );
     }
 
-    pub(super) fn do_manifest(&mut self, verb: &'static str, path: PathBuf, kind: DirEntryKind) {
-        self.note_action(verb, path.display().to_string());
+    pub(super) fn do_manifest(&mut self, verb: DirVerb, plan: DirPlan) {
+        let shown = display_path(&plan.path);
+        self.note_action(verb.name(), shown.clone());
         let mut argv = self.kubectl_base();
-        argv.push(verb.into());
-        argv.extend(manifest_source(&path, kind));
-        if verb == "delete" {
+        argv.extend([verb.name().to_string(), "-f".to_string()]);
+        argv.push(plan.snapshot.file.to_string_lossy().into_owned());
+        if verb == DirVerb::Delete {
             argv.push("--ignore-not-found".into());
         }
-        let shown = display_path(&path);
-        let claim = self.claim_status(format!("{verb} {shown}…"));
+        let claim = self.claim_status(format!("{} {shown}…", verb.name()));
         let tx = self.tx.clone();
         let genr = self.generation;
         tokio::spawn(async move {
             let (message, err) = match run_kubectl(argv).await {
                 Ok(out) if out.code == Some(0) => {
-                    (manifest_summary(verb, &shown, &out.stdout), false)
+                    (manifest_summary(verb.name(), &shown, &out.stdout), false)
                 }
-                Ok(out) => (format!("{verb} {shown} failed: {}", out.error()), true),
-                Err(e) => (format!("{verb} {shown} failed: {e}"), true),
+                Ok(out) => (
+                    format!("{} {shown} failed: {}", verb.name(), out.error()),
+                    true,
+                ),
+                Err(e) => (format!("{} {shown} failed: {e}", verb.name()), true),
             };
+            // The snapshot lives until kubectl has read it.
+            drop(plan);
             let _ = tx
                 .send(Msg::Flash {
                     generation: genr,

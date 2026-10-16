@@ -411,15 +411,10 @@ enum ConfirmAction {
     /// Uninstall one or more Helm releases (`helm uninstall`), `(name, ns)`
     /// per release — bulk when marked, like [`ConfirmAction::Delete`].
     HelmUninstall { targets: Vec<(String, String)> },
-    /// `kubectl apply` a local manifest, kustomization, or directory (`:dir`).
-    ManifestApply {
-        path: std::path::PathBuf,
-        kind: dir::DirEntryKind,
-    },
-    /// `kubectl delete` what a local manifest describes (`:dir`).
-    ManifestDelete {
-        path: std::path::PathBuf,
-        kind: dir::DirEntryKind,
+    /// `kubectl apply` or `delete` a rendered manifest snapshot (`:dir`).
+    Manifest {
+        verb: dir::DirVerb,
+        plan: dir::DirPlan,
     },
     /// Launch a privileged node debug pod (`kubectl debug node/<node>`) after
     /// previewing the host access it grants.
@@ -3016,12 +3011,7 @@ impl App {
     /// Whether the open dialog belongs to the manifest browser, so the
     /// renderer keeps the listing underneath it.
     pub fn over_dir_browser(&self) -> bool {
-        let manifest = |action: &ConfirmAction| {
-            matches!(
-                action,
-                ConfirmAction::ManifestApply { .. } | ConfirmAction::ManifestDelete { .. }
-            )
-        };
+        let manifest = |action: &ConfirmAction| matches!(action, ConfirmAction::Manifest { .. });
         self.confirm_return == Mode::Dir
             && (self.confirm_action.as_ref().is_some_and(manifest)
                 || matches!(
