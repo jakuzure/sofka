@@ -345,6 +345,15 @@ async fn dir_palette_navigation_drops_an_open_preview() {
     assert_eq!(app.mode, Mode::Diff);
     assert!(app.dir.preview.is_some());
 
+    // Help over the diff, and a search inside that help, also return to it.
+    app.handle_key(press(KeyCode::Char('?'))).unwrap();
+    app.handle_key(press(KeyCode::Char('/'))).unwrap();
+    assert!(app.dir.preview.is_some());
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Diff);
+    assert!(app.dir.preview.is_some());
+
     type_command(&mut app, "pods");
     assert_ne!(app.mode, Mode::Diff);
     assert!(app.dir.preview.is_none());
