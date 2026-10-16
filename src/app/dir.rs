@@ -1,13 +1,15 @@
 //! `:dir [path]` — browse local manifests and apply or delete them against the
 //! current context. Apply always goes through a `kubectl diff` preview first.
 //!
-//! The selection is rendered once with a client-side dry run into a private
-//! snapshot. The diff, the guardrails, and the apply or delete all use that
-//! snapshot, so an edit made after the preview is never applied unseen.
+//! The selection is rendered once with a client-side dry run into an
+//! in-memory snapshot. The diff, the guardrails, and the apply or delete all
+//! use that snapshot, passed to kubectl on stdin, so an edit made after the
+//! preview is never applied unseen and rendered Secrets never touch the disk.
 
 use super::*;
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// File names that make a directory a kustomization, so it is applied with
@@ -33,7 +35,10 @@ impl DirEntryKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
+    /// For display; lossy when the file name is not UTF-8.
     pub name: String,
+    /// The file name as the filesystem has it.
+    pub file_name: OsString,
     pub kind: DirEntryKind,
     pub size: Option<u64>,
 }
@@ -75,45 +80,11 @@ pub struct RenderedObject {
     pub namespace: String,
 }
 
-/// The rendered objects in a private directory, removed when dropped.
-pub struct ManifestSnapshot {
-    dir: PathBuf,
-    pub file: PathBuf,
-}
-
-impl ManifestSnapshot {
-    /// Write `items` as a `List` only this user can read.
-    pub fn write(items: &[serde_json::Value]) -> std::io::Result<Self> {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "sofka-dir-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let mut builder = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-        builder.create(&dir)?;
-        let snapshot = Self {
-            file: dir.join("manifest.json"),
-            dir,
-        };
-        let list = serde_json::json!({"apiVersion": "v1", "kind": "List", "items": items});
-        secret_edit::create_private(&snapshot.file, &list.to_string())?;
-        Ok(snapshot)
-    }
-}
-
-impl Drop for ManifestSnapshot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
 /// A rendered selection, ready to diff, guard, and run.
 pub struct DirPlan {
     pub path: PathBuf,
-    pub snapshot: ManifestSnapshot,
+    /// The rendered objects as a JSON `List`, fed to kubectl on stdin.
+    pub snapshot: String,
     pub objects: Vec<RenderedObject>,
     /// `kubectl diff` output for an apply; `None` for a delete.
     pub diff: Option<String>,
@@ -125,7 +96,8 @@ impl DirBrowser {
     }
 
     fn selected_path(&self) -> Option<(PathBuf, DirEntryKind)> {
-        self.selected().map(|e| (self.path.join(&e.name), e.kind))
+        self.selected()
+            .map(|e| (self.path.join(&e.file_name), e.kind))
     }
 }
 
@@ -135,7 +107,8 @@ pub(super) fn read_manifest_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
     let read = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut out = Vec::new();
     for entry in read.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue;
         }
@@ -155,6 +128,7 @@ pub(super) fn read_manifest_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
         };
         out.push(DirEntry {
             name,
+            file_name,
             kind,
             size: (kind == DirEntryKind::Manifest).then_some(meta.len()),
         });
@@ -178,8 +152,8 @@ fn is_kustomization(dir: &Path) -> bool {
 
 /// The `-f`/`-k` source arguments for `path`: a kustomization is built with
 /// `-k`, a directory is read recursively, a file is read as is.
-pub(super) fn manifest_source(path: &Path, kind: DirEntryKind) -> Vec<String> {
-    let path = path.to_string_lossy().into_owned();
+pub(super) fn manifest_source(path: &Path, kind: DirEntryKind) -> Vec<OsString> {
+    let path = path.as_os_str().to_os_string();
     match kind {
         DirEntryKind::Kustomization => vec!["-k".into(), path],
         DirEntryKind::Dir => vec!["-f".into(), path, "-R".into()],
@@ -220,12 +194,26 @@ impl KubectlOutput {
     }
 }
 
-async fn run_kubectl(argv: Vec<String>) -> Result<KubectlOutput, String> {
-    match tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()
-        .await
-    {
+/// Run kubectl, writing `stdin` to it when given.
+async fn run_kubectl(argv: Vec<OsString>, stdin: Option<&str>) -> Result<KubectlOutput, String> {
+    use tokio::io::AsyncWriteExt as _;
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdin(if stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = async {
+        let mut child = cmd.spawn()?;
+        if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+            pipe.write_all(text.as_bytes()).await?;
+        }
+        child.wait_with_output().await
+    };
+    match output.await {
         Ok(out) => Ok(KubectlOutput {
             code: out.status.code(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -287,32 +275,37 @@ pub(super) fn rendered_objects(
     Ok((items, objects))
 }
 
-/// Render `source` with a client-side dry run, snapshot it, and (for an
-/// apply) diff the snapshot against the cluster.
+/// Render `source` with a client-side dry run, snapshot it in memory, and
+/// (for an apply) diff the snapshot against the cluster.
 async fn plan(
-    base: Vec<String>,
+    base: Vec<OsString>,
     verb: DirVerb,
     path: PathBuf,
     kind: DirEntryKind,
 ) -> Result<DirPlan, String> {
     let mut render = base.clone();
-    render.extend(["apply", "--dry-run=client", "-o", "json"].map(String::from));
+    render.extend(["apply", "--dry-run=client", "-o", "json"].map(OsString::from));
+    // A delete needs only identities; a manifest holding just `apiVersion`,
+    // `kind`, and `metadata.name` is valid input for it.
+    if verb == DirVerb::Delete {
+        render.push("--validate=false".into());
+    }
     render.extend(manifest_source(&path, kind));
-    let out = run_kubectl(render).await?;
+    let out = run_kubectl(render, None).await?;
     if out.code != Some(0) {
         return Err(out.error());
     }
     let (items, objects) = rendered_objects(&out.stdout)?;
-    let snapshot = ManifestSnapshot::write(&items).map_err(|e| format!("snapshot failed: {e}"))?;
+    let snapshot =
+        serde_json::json!({"apiVersion": "v1", "kind": "List", "items": items}).to_string();
     let diff = match verb {
         DirVerb::Delete => None,
         DirVerb::Apply => {
             let mut argv = base;
-            argv.extend(["diff".to_string(), "-f".to_string()]);
-            argv.push(snapshot.file.to_string_lossy().into_owned());
+            argv.extend(["diff", "-f", "-"].map(OsString::from));
             // `kubectl diff` exits 0 when nothing would change and 1 when
             // something would; anything else is an error.
-            let out = run_kubectl(argv).await?;
+            let out = run_kubectl(argv, Some(&snapshot)).await?;
             match out.code {
                 Some(0) => Some(String::new()),
                 Some(1) if !out.stdout.trim().is_empty() => Some(out.stdout),
@@ -345,11 +338,11 @@ impl App {
 
     /// List `path` and select `keep` (or the first entry). Returns whether
     /// the listing succeeded.
-    fn load_dir(&mut self, path: PathBuf, keep: Option<&str>) -> bool {
+    fn load_dir(&mut self, path: PathBuf, keep: Option<&OsStr>) -> bool {
         match read_manifest_dir(&path) {
             Ok(entries) => {
                 let at = keep
-                    .and_then(|k| entries.iter().position(|e| e.name == k))
+                    .and_then(|k| entries.iter().position(|e| e.file_name == k))
                     .unwrap_or(0);
                 self.dir.entries = entries;
                 self.dir.path = path;
@@ -390,7 +383,7 @@ impl App {
             Some(Action::Accept) => self.dir_accept(),
             Some(Action::Parent) => self.dir_parent(),
             Some(Action::Refresh) => {
-                let keep = self.dir.selected().map(|e| e.name.clone());
+                let keep = self.dir.selected().map(|e| e.file_name.clone());
                 self.load_dir(self.dir.path.clone(), keep.as_deref());
             }
             Some(Action::Edit) => self.dir_edit(),
@@ -419,11 +412,7 @@ impl App {
         let Some(parent) = self.dir.path.parent().map(Path::to_path_buf) else {
             return;
         };
-        let child = self
-            .dir
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned());
+        let child = self.dir.path.file_name().map(OsStr::to_os_string);
         self.load_dir(parent, child.as_deref());
     }
 
@@ -474,7 +463,11 @@ impl App {
             DirVerb::Delete => "reading",
         };
         let claim = self.claim_status(format!("{doing} {}…", display_path(&path)));
-        let base = self.kubectl_base();
+        let base = self
+            .kubectl_base()
+            .into_iter()
+            .map(OsString::from)
+            .collect();
         let tx = self.tx.clone();
         let genr = self.generation;
         tokio::spawn(async move {
@@ -579,6 +572,17 @@ impl App {
                 .or_default()
                 .push((o.name.clone(), o.namespace.clone()));
         }
+        let all: Vec<(String, String, String)> = groups
+            .iter()
+            .flat_map(|(plural, targets)| {
+                targets
+                    .iter()
+                    .map(|(name, ns)| (plural.clone(), name.clone(), ns.clone()))
+            })
+            .collect();
+        if !self.within_bulk_limits(verb.name(), &all) {
+            return;
+        }
         let mut level = ConfirmLevel::Plain;
         for (plural, targets) in &groups {
             match self.guard(verb.name(), plural, targets, ConfirmLevel::Plain) {
@@ -615,9 +619,12 @@ impl App {
     pub(super) fn do_manifest(&mut self, verb: DirVerb, plan: DirPlan) {
         let shown = display_path(&plan.path);
         self.note_action(verb.name(), shown.clone());
-        let mut argv = self.kubectl_base();
-        argv.extend([verb.name().to_string(), "-f".to_string()]);
-        argv.push(plan.snapshot.file.to_string_lossy().into_owned());
+        let mut argv: Vec<OsString> = self
+            .kubectl_base()
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        argv.extend([verb.name(), "-f", "-"].map(OsString::from));
         if verb == DirVerb::Delete {
             argv.push("--ignore-not-found".into());
         }
@@ -625,7 +632,7 @@ impl App {
         let tx = self.tx.clone();
         let genr = self.generation;
         tokio::spawn(async move {
-            let (message, err) = match run_kubectl(argv).await {
+            let (message, err) = match run_kubectl(argv, Some(&plan.snapshot)).await {
                 Ok(out) if out.code == Some(0) => {
                     (manifest_summary(verb.name(), &shown, &out.stdout), false)
                 }
@@ -635,8 +642,6 @@ impl App {
                 ),
                 Err(e) => (format!("{} {shown} failed: {e}", verb.name()), true),
             };
-            // The snapshot lives until kubectl has read it.
-            drop(plan);
             let _ = tx
                 .send(Msg::Flash {
                     generation: genr,

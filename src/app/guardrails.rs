@@ -69,6 +69,39 @@ impl App {
         Some(base.max(found.confirmation))
     }
 
+    /// The `max_bulk` limits matching `action`, checked against the whole
+    /// set of `(plural, name, namespace)` targets at once: a limit counts
+    /// every target its `resources` and `namespaces` match, whatever kind
+    /// each is. Flashes and returns `false` when a limit is exceeded.
+    pub(super) fn within_bulk_limits(
+        &mut self,
+        action: &str,
+        targets: &[(String, String, String)],
+    ) -> bool {
+        for g in &self.guardrails {
+            let Some(max) = g.max_bulk else { continue };
+            if !list_matches(&g.contexts, &self.cluster.context)
+                || !list_matches(&g.actions, action)
+            {
+                continue;
+            }
+            let count = targets
+                .iter()
+                .filter(|(plural, _, ns)| {
+                    list_matches(&g.resources, plural)
+                        && (g.namespaces.is_empty() || list_matches(&g.namespaces, ns))
+                })
+                .count();
+            if count > max {
+                self.flash_warn(&format!(
+                    "guardrail: {count} exceeds the max of {max} for {action} — select fewer"
+                ));
+                return false;
+            }
+        }
+        true
+    }
+
     /// Whether a guardrail denies `action` outright, without flashing or
     /// otherwise touching the app. For looking ahead: a caller that is about
     /// to do expensive setup for an action can find out it will be refused

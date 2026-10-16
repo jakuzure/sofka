@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::dir::{
-    DirEntryKind, DirPlan, DirVerb, ManifestSnapshot, RenderedObject, manifest_source,
-    manifest_summary, preview_lines, rendered_objects, resolve_dir_arg,
+    DirEntryKind, DirPlan, DirVerb, RenderedObject, manifest_source, manifest_summary,
+    preview_lines, rendered_objects, resolve_dir_arg,
 };
 use std::path::{Path, PathBuf};
 
@@ -149,7 +149,7 @@ fn configmap(name: &str, ns: &str) -> serde_json::Value {
 fn plan(path: PathBuf, objects: &[serde_json::Value], diff: Option<&str>) -> DirPlan {
     DirPlan {
         path,
-        snapshot: ManifestSnapshot::write(objects).unwrap(),
+        snapshot: json!({"apiVersion": "v1", "kind": "List", "items": objects}).to_string(),
         objects: objects
             .iter()
             .map(|o| RenderedObject {
@@ -220,22 +220,20 @@ async fn dir_apply_previews_the_diff_then_confirms_the_snapshot() {
         "{}",
         app.confirm_label
     );
-    let snapshot = match &app.confirm_action {
+    match &app.confirm_action {
         Some(ConfirmAction::Manifest {
             verb: DirVerb::Apply,
             plan,
-        }) => plan.snapshot.file.clone(),
+        }) => {
+            assert!(plan.snapshot.contains("\"web\""), "{}", plan.snapshot);
+            assert!(!plan.snapshot.contains("other"), "{}", plan.snapshot);
+        }
         _ => panic!("expected a manifest apply"),
-    };
-    let rendered = std::fs::read_to_string(&snapshot).unwrap();
-    assert!(rendered.contains("\"web\""), "{rendered}");
-    assert!(!rendered.contains("other"), "{rendered}");
+    }
 
-    // Cancelling returns to the listing and removes the snapshot.
     app.handle_key(press(KeyCode::Esc)).unwrap();
     assert_eq!(app.mode, Mode::Dir);
     assert!(app.confirm_action.is_none());
-    assert!(!snapshot.exists());
 }
 
 #[tokio::test]
@@ -322,6 +320,81 @@ async fn dir_leaving_the_preview_drops_the_pending_apply() {
     app.handle_key(press(KeyCode::Char('a'))).unwrap();
     assert_eq!(app.mode, Mode::Diff);
     assert!(app.confirm_action.is_none());
+}
+
+#[tokio::test]
+async fn dir_palette_navigation_drops_an_open_preview() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('a')));
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Apply,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "default")],
+            Some(DIFF),
+        ),
+    );
+    assert!(app.dir.preview.is_some());
+
+    // A palette visit that returns to the diff keeps it.
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    assert!(app.dir.preview.is_some());
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Diff);
+    assert!(app.dir.preview.is_some());
+
+    type_command(&mut app, "pods");
+    assert_ne!(app.mode, Mode::Diff);
+    assert!(app.dir.preview.is_none());
+}
+
+#[tokio::test]
+async fn dir_bulk_limit_counts_every_kind_in_the_selection() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    guardrail(
+        &mut app,
+        r#"
+        [[guardrails]]
+        actions = ["delete"]
+        max_bulk = 1
+        "#,
+    );
+    let deployment = json!({"apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "default"}});
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(
+            root.join("web.yaml"),
+            &[configmap("web", "default"), deployment],
+            None,
+        ),
+    );
+    assert!(app.confirm_action.is_none());
+    assert!(app.flash.contains("exceeds the max of 1"), "{}", app.flash);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dir_opens_a_manifest_whose_name_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    let root = manifests();
+    let name = std::ffi::OsStr::from_bytes(b"b\xffad.yaml");
+    if std::fs::write(root.join(name), "kind: ConfigMap\n").is_err() {
+        // Some filesystems (APFS) refuse non-UTF-8 names outright.
+        return;
+    }
+    let (mut app, _rx) = test_app();
+    type_command(&mut app, &format!("dir {}", root.display()));
+    let lossy = name.to_string_lossy().into_owned();
+    select(&mut app, &lossy);
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Detail);
+    assert_eq!(app.detail.lines[0], "kind: ConfigMap");
 }
 
 #[tokio::test]

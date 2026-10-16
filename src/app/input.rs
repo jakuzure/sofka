@@ -256,6 +256,18 @@ impl App {
             Mode::PortForwardPicker => self.key_port_forward_picker(key),
             Mode::PluginForm => self.key_plugin_form(key),
         }
+        // An apply preview lives only while its diff is on screen, or under
+        // an overlay that returns to it.
+        let in_preview = match self.mode {
+            Mode::Diff => true,
+            Mode::Command => self.palette_return == Mode::Diff,
+            Mode::Help => self.help_return == Mode::Diff,
+            Mode::DocFilter => self.doc_filter_return == Mode::Diff,
+            _ => false,
+        };
+        if !in_preview {
+            self.dir.preview = None;
+        }
         Ok(())
     }
 

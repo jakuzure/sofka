@@ -1135,15 +1135,18 @@ folder, such as a named pipe called `x.yaml`, are skipped. A folder with a
 
 Both start by rendering the selection once with
 `kubectl apply --dry-run=client -o json`: a manifest with `-f`, a folder with
-`-f <folder> -R`, and a kustomization with `-k`. The rendered objects go to a
-private temporary file, and the diff, the apply, and the delete all read that
-file. An edit made after the diff opened is not applied; press `a` again to see
-it. The file is removed when the action finishes or is cancelled.
+`-f <folder> -R`, and a kustomization with `-k`. A delete renders with
+`--validate=false`, so a manifest holding only `apiVersion`, `kind`, and
+`metadata.name` works. The rendered objects stay in memory and reach the diff,
+the apply, and the delete on stdin (`-f -`), so a rendered Secret is never
+written to disk. An edit made after the diff opened is not applied; press `a`
+again to see it. Leaving the diff drops the preview.
 
 Rendering fills in each object's namespace, using the context's default for
 objects without one. Guardrails match the `apply` and `delete` actions against
 every rendered object's resource and namespace, like the same action on a table
-row, and a folder counts as a bulk action for `max_bulk`. Every command is
+row. `max_bulk` counts every object a rule matches across the whole selection,
+whatever its kind. Every command is
 pinned to the current context with `--context`. Apply and delete are blocked in
 read-only mode and recorded in `:journal`.
 
