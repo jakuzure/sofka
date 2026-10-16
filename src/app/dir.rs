@@ -561,12 +561,16 @@ impl App {
         let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         for o in &plan.objects {
             let group = o.api_version.rsplit_once('/').map_or("", |(g, _)| g);
-            let plural = self
-                .cluster
-                .resolve_in_group(&o.kind, group)
-                .map(|k| k.ar.plural.to_lowercase())
-                // Not discovered (yet): the conventional plural.
-                .unwrap_or_else(|| format!("{}s", o.kind.to_lowercase()));
+            // A guessed plural could miss a guardrail written for the real
+            // one (`networkpolicys`), so an undiscovered kind is refused.
+            let Some(kind) = self.cluster.resolve_in_group(&o.kind, group) else {
+                self.flash_warn(&format!(
+                    "can't check guardrails: {} {} is not in this cluster's discovered resources",
+                    o.api_version, o.kind
+                ));
+                return;
+            };
+            let plural = kind.ar.plural.to_lowercase();
             groups
                 .entry(plural)
                 .or_default()

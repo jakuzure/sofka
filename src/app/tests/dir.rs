@@ -518,6 +518,27 @@ async fn dir_guardrail_confirmation_applies_to_apply() {
     assert_eq!(app.mode, Mode::Dir);
 }
 
+#[tokio::test]
+async fn dir_refuses_a_kind_it_cannot_match_against_guardrails() {
+    let root = manifests();
+    let (mut app, _rx, request) = start(&root, press(KeyCode::Char('d')));
+    let policy = json!({"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": {"name": "deny-all", "namespace": "prod"}});
+    deliver(
+        &mut app,
+        request,
+        DirVerb::Delete,
+        plan(root.join("web.yaml"), &[policy], None),
+    );
+    assert!(app.confirm_action.is_none());
+    assert!(
+        app.flash.contains("can't check guardrails"),
+        "{}",
+        app.flash
+    );
+    assert!(app.flash.contains("NetworkPolicy"), "{}", app.flash);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn dir_skips_a_fifo_with_a_manifest_name() {

@@ -1146,7 +1146,8 @@ Rendering fills in each object's namespace, using the context's default for
 objects without one. Guardrails match the `apply` and `delete` actions against
 every rendered object's resource and namespace, like the same action on a table
 row. `max_bulk` counts every object a rule matches across the whole selection,
-whatever its kind. Every command is
+whatever its kind. A selection with a kind sofka has not discovered is refused,
+since its guardrails could not be matched reliably. Every command is
 pinned to the current context with `--context`. Apply and delete are blocked in
 read-only mode and recorded in `:journal`.
 
