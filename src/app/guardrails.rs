@@ -105,8 +105,8 @@ impl App {
         // The PVC browser is the only full-screen view that launches guarded
         // actions, so it is the only one the dialog has to return to; every
         // other guarded action starts (and belongs) at the table.
-        self.confirm_return = if self.mode == Mode::PvcExplore {
-            Mode::PvcExplore
+        self.confirm_return = if matches!(self.mode, Mode::PvcExplore | Mode::Dir) {
+            self.mode
         } else {
             Mode::Table
         };

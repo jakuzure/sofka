@@ -458,6 +458,15 @@ pub enum Msg {
         generation: u64,
         row: Box<crate::fleet::FleetRow>,
     },
+    /// A `kubectl diff` preview for `:dir` apply: `None` when nothing would
+    /// change.
+    DirPreview {
+        generation: u64,
+        claim: StatusClaim,
+        path: std::path::PathBuf,
+        kind: crate::app::dir::DirEntryKind,
+        result: Result<Option<String>, String>,
+    },
     /// Results of a `:find <text>` sweep across kinds.
     FindResults {
         generation: u64,

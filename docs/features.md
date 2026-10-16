@@ -1114,6 +1114,30 @@ satisfies the `baseline` Pod Security Standard - but not `restricted`, which
 also requires `runAsNonRoot`. In a namespace enforcing `restricted` the helper
 pod is rejected; browse through a pod that already mounts the claim instead.
 
+## Manifest browser
+
+`:dir [path]` lists a local directory under the header, so a manifest from
+your repository is one keystroke from the cluster you are looking at. Without
+a path it opens the directory sofka was started from; `~` and relative paths
+work. Only folders and `.yaml`, `.yml`, and `.json` files are listed, folders
+first, and hidden entries are skipped. A folder with a `kustomization.yaml`,
+`kustomization.yml`, or `Kustomization` file is marked `kustomize`.
+
+- **`enter`** opens a folder, or shows a manifest as a read-only document.
+- **`e`** opens the manifest in `$KUBE_EDITOR` or `$EDITOR`, suspending the TUI.
+- **`a`** runs `kubectl diff` and shows the result. Nothing is applied until
+  you press `a` again in that diff and confirm. When nothing would change, the
+  status line says so and no diff opens.
+- **`d`** runs `kubectl delete --ignore-not-found` for what the selection
+  describes, after confirmation.
+
+A manifest is passed with `-f`, a folder with `-f <folder> -R`, and a
+kustomization with `-k`. Every command is pinned to the current context with
+`--context`. Objects without a namespace go to the kubeconfig context's
+default namespace, as with a plain `kubectl apply`. Apply and delete are
+blocked in read-only mode and match the `apply` and `delete` guardrails against
+`manifests`. Both are recorded in `:journal`.
+
 ## Safety
 
 - **Read-only mode**, **declarative guardrails**, **action-aware authorization**
