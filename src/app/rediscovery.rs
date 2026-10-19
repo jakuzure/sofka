@@ -31,6 +31,7 @@ impl App {
             Retry::Query(query) => query.resource.clone(),
         };
         self.last_rediscovery = Some(std::time::Instant::now());
+        self.rediscovery_request += 1;
         self.pending_rediscovery = Some((self.generation, retry));
         self.set_flash(format!("looking up '{resource}' in API discovery…"));
         crate::log_info!(
@@ -41,12 +42,19 @@ impl App {
         let client = self.cluster.client.clone();
         let tx = self.tx.clone();
         let epoch = self.context_epoch;
+        let request = self.rediscovery_request;
         tokio::spawn(async move {
             let result = crate::k8s::rediscover(&client)
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Msg::Rediscovered { epoch, result }).await;
+            let _ = tx
+                .send(Msg::Rediscovered {
+                    epoch,
+                    request,
+                    result,
+                })
+                .await;
         });
         true
     }
@@ -64,6 +72,9 @@ impl App {
                     context = self.cluster.context,
                     kinds = self.cluster.catalog.len()
                 );
+                // A review that fails or comes back incomplete sends nothing,
+                // so drop the old allow-list rather than let it hide new kinds.
+                self.rbac_allowed = None;
                 self.refresh_rbac();
                 if self.mode == Mode::Command {
                     self.update_suggestions();

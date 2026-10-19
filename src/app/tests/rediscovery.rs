@@ -1,14 +1,36 @@
 use super::*;
 
-/// The discovery result of a cluster that has since gained a `widgets` CRD.
-fn with_widgets() -> Box<crate::k8s::Discovery> {
+/// The discovery result of a cluster that has since gained `kinds`, as
+/// `(kind, plural)` pairs in `example.com`.
+fn with_kinds(kinds: &[(&str, &str)]) -> Box<crate::k8s::Discovery> {
     let mut cluster = Cluster::fake();
-    cluster.register_kind("example.com", "Widget", "widgets", true);
+    for (kind, plural) in kinds {
+        cluster.register_kind("example.com", kind, plural, true);
+    }
     Box::new(cluster.fake_discovery())
 }
 
-fn deliver(app: &mut App, epoch: u64, result: Result<Box<crate::k8s::Discovery>, String>) {
-    app.handle_msg(Msg::Rediscovered { epoch, result });
+fn with_widgets() -> Box<crate::k8s::Discovery> {
+    with_kinds(&[("Widget", "widgets")])
+}
+
+/// Deliver a result for the latest rediscovery on the current context.
+fn deliver(app: &mut App, result: Result<Box<crate::k8s::Discovery>, String>) {
+    let (epoch, request) = (app.context_epoch, app.rediscovery_request);
+    deliver_as(app, epoch, request, result);
+}
+
+fn deliver_as(
+    app: &mut App,
+    epoch: u64,
+    request: u64,
+    result: Result<Box<crate::k8s::Discovery>, String>,
+) {
+    app.handle_msg(Msg::Rediscovered {
+        epoch,
+        request,
+        result,
+    });
 }
 
 #[tokio::test]
@@ -23,8 +45,7 @@ async fn a_kind_missing_at_startup_resolves_after_rediscovery() {
     assert!(!app.flash_err, "{}", app.flash);
     assert!(app.flash.contains("looking up 'widgets'"), "{}", app.flash);
 
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Ok(with_widgets()));
+    deliver(&mut app, Ok(with_widgets()));
     assert_eq!(app.kind_plural, "widgets");
     assert!(!app.flash_err, "{}", app.flash);
 
@@ -54,8 +75,7 @@ async fn a_query_retries_with_its_namespace_after_rediscovery() {
     palette(&mut app, "widgets -n prod");
     assert!(!app.flash_err, "{}", app.flash);
 
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Ok(with_widgets()));
+    deliver(&mut app, Ok(with_widgets()));
     assert_eq!(app.kind_plural, "widgets");
     assert_eq!(app.namespace, "prod");
 }
@@ -64,16 +84,14 @@ async fn a_query_retries_with_its_namespace_after_rediscovery() {
 async fn a_lookup_that_still_misses_shows_the_usual_error() {
     let (mut app, _rx) = test_app();
     palette(&mut app, "gadgets");
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Ok(with_widgets()));
+    deliver(&mut app, Ok(with_widgets()));
     assert!(app.flash_err);
     assert_eq!(app.flash, "No resource matches 'gadgets'");
 
     // A failed discovery reports the miss as well.
     app.last_rediscovery = None;
     palette(&mut app, "gadgets");
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Err("connection refused".into()));
+    deliver(&mut app, Err("connection refused".into()));
     assert!(app.flash_err);
     assert_eq!(app.flash, "No resource matches 'gadgets'");
 }
@@ -89,8 +107,7 @@ async fn rediscovery_is_throttled_to_one_per_five_seconds() {
     assert!(app.flash_err);
     assert_eq!(app.flash, "No resource matches 'gadgets'");
 
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Ok(with_widgets()));
+    deliver(&mut app, Ok(with_widgets()));
     assert_eq!(app.kind_plural, "widgets");
 
     palette(&mut app, "gadgets");
@@ -107,7 +124,7 @@ async fn rediscovery_is_throttled_to_one_per_five_seconds() {
 async fn a_result_from_before_a_context_switch_is_ignored() {
     let (mut app, _rx) = test_app();
     palette(&mut app, "widgets");
-    let stale = app.context_epoch;
+    let (stale, request) = (app.context_epoch, app.rediscovery_request);
 
     let mut west = Cluster::fake();
     west.context = "west".into();
@@ -118,7 +135,7 @@ async fn a_result_from_before_a_context_switch_is_ignored() {
     });
     let kind = app.kind_plural.clone();
 
-    deliver(&mut app, stale, Ok(with_widgets()));
+    deliver_as(&mut app, stale, request, Ok(with_widgets()));
     assert!(app.cluster.resolve("widgets").is_none());
     assert_eq!(app.kind_plural, kind);
 }
@@ -130,8 +147,46 @@ async fn navigating_away_keeps_the_new_kinds_but_drops_the_retry() {
     palette(&mut app, "deploy");
     assert_eq!(app.kind_plural, "deployments");
 
-    let epoch = app.context_epoch;
-    deliver(&mut app, epoch, Ok(with_widgets()));
+    deliver(&mut app, Ok(with_widgets()));
     assert_eq!(app.kind_plural, "deployments");
     assert!(app.cluster.resolve("widgets").is_some());
+}
+
+#[tokio::test]
+async fn a_superseded_run_does_not_answer_the_newer_lookup() {
+    let (mut app, _rx) = test_app();
+    palette(&mut app, "widgets");
+    let first = app.rediscovery_request;
+    // The first run is still going when the throttle lets a second one start.
+    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(6));
+    palette(&mut app, "gadgets");
+    assert!(!app.flash_err, "{}", app.flash);
+
+    let epoch = app.context_epoch;
+    deliver_as(&mut app, epoch, first, Ok(with_widgets()));
+    assert!(app.cluster.resolve("widgets").is_none());
+    assert_ne!(app.kind_plural, "widgets");
+
+    deliver(&mut app, Ok(with_kinds(&[("Gadget", "gadgets")])));
+    assert_eq!(app.kind_plural, "gadgets");
+}
+
+#[tokio::test]
+async fn new_kinds_are_not_hidden_by_the_old_rbac_allow_list() {
+    let (mut app, _rx) = test_app();
+    app.rbac_allowed = Some(HashSet::from(["pods".to_string()]));
+    palette(&mut app, "widgets");
+    // No RBAC review answers: the cluster is unreachable in tests.
+    deliver(&mut app, Ok(with_widgets()));
+    assert_eq!(app.kind_plural, "widgets");
+
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    assert!(
+        app.cmd_suggestions.iter().any(|s| s.label == "widgets"),
+        "{:?}",
+        app.cmd_suggestions
+            .iter()
+            .map(|s| &s.label)
+            .collect::<Vec<_>>()
+    );
 }

@@ -356,9 +356,11 @@ pub enum Msg {
         result: Result<Box<crate::k8s::Cluster>, crate::k8s::ConnectError>,
     },
     /// Result of the API discovery a `:` lookup miss started. Tagged with the
-    /// context epoch so a result can't land on a different cluster.
+    /// context epoch so a result can't land on a different cluster, and with
+    /// its request so a superseded run is dropped.
     Rediscovered {
         epoch: u64,
+        request: u64,
         result: Result<Box<crate::k8s::Discovery>, String>,
     },
     /// Result of re-running the exec plugin for an expiring client

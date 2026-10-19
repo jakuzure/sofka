@@ -2552,6 +2552,9 @@ pub struct App {
     /// The `:` lookup waiting on that discovery, with the view generation it
     /// was made in.
     pending_rediscovery: Option<(u64, rediscovery::Retry)>,
+    /// The latest miss-triggered API discovery. Results of earlier runs are
+    /// dropped, so each retry is answered by its own discovery.
+    pub(super) rediscovery_request: u64,
     /// Notifications waiting for the main loop to deliver (bell, desktop
     /// escape sequence, notifier subprocess). Drained once per frame and
     /// joined, so a burst arriving in one batch is one delivery — sinks
@@ -2927,6 +2930,7 @@ impl App {
             context_epoch: 0,
             last_rediscovery: None,
             pending_rediscovery: None,
+            rediscovery_request: 0,
             pending_notify: Vec::new(),
             prev_revisions: PrevRevisions::default(),
             timeline_target: None,

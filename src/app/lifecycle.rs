@@ -2231,7 +2231,11 @@ impl App {
                     }
                 }
             }
-            Msg::Rediscovered { epoch, result } if epoch == self.context_epoch => {
+            Msg::Rediscovered {
+                epoch,
+                request,
+                result,
+            } if epoch == self.context_epoch && request == self.rediscovery_request => {
                 self.apply_rediscovery(result);
             }
             Msg::CredentialsRenewed { attempt, result } => {
