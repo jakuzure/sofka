@@ -672,7 +672,9 @@ include those conditions. Row filters can search the route paths.
   original value the same way. Refresh sets the `argocd.argoproj.io/refresh`
   annotation to `normal`, so the controller re-compares the Application
   against Git and then clears it; hard refresh sets it to `hard`, which also
-  drops the repo-server manifest cache. Neither asks first: the patch itself
+  drops the repo-server manifest cache. Both also set
+  `argocd.argoproj.io/refresh-timestamp`, as Argo CD's own refresh does, so a
+  request sent while the controller is mid-reconcile isn't dropped. Neither asks first: the patch itself
   only requests a comparison. On an Application with automated sync, though,
   an OutOfSync result starts that sync right away, including its `prune` if
   configured, just as the next periodic reconcile would. Sync-now patches the top-level `operation`

@@ -2433,6 +2433,7 @@ impl App {
         if targets.is_empty() {
             return; // see `do_flux_suspend`
         }
+        let now = k8s_openapi::jiff::Timestamp::now().to_string();
         let (action, verb) = if hard {
             ("hard refresh", "hard refreshing")
         } else {
@@ -2455,7 +2456,7 @@ impl App {
         self.spawn_patch_action(
             kind,
             targets,
-            Patch::Merge(argocd_refresh_patch(hard)),
+            Patch::Merge(argocd_refresh_patch(hard, &now)),
             claim,
             ok_message,
             move |name, _, e| format!("{action} {name} failed: {e}"),

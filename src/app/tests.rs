@@ -7810,10 +7810,17 @@ async fn argocd_menu_refresh_sets_annotation_without_confirming() {
         "{}",
         log[0]["path"]
     );
-    assert_eq!(
-        log[0]["body"],
-        json!({"metadata": {"annotations": {"argocd.argoproj.io/refresh": "normal"}}})
+    let annotations = &log[0]["body"]["metadata"]["annotations"];
+    assert_eq!(annotations["argocd.argoproj.io/refresh"], "normal");
+    assert!(
+        annotations["argocd.argoproj.io/refresh-timestamp"]
+            .as_str()
+            .unwrap()
+            .parse::<k8s_openapi::jiff::Timestamp>()
+            .is_ok(),
+        "{annotations}"
     );
+    assert_eq!(annotations.as_object().unwrap().len(), 2, "{annotations}");
     assert!(app.journal.lines().iter().any(|l| l.contains("refresh")));
 }
 
@@ -7842,9 +7849,11 @@ async fn argocd_hard_refresh_patches_every_marked_application() {
     assert!(paths[0].ends_with("/applications/frontend"), "{paths:?}");
     assert!(paths[1].ends_with("/applications/guestbook"), "{paths:?}");
     for entry in log.iter() {
-        assert_eq!(
-            entry["body"],
-            json!({"metadata": {"annotations": {"argocd.argoproj.io/refresh": "hard"}}})
+        let annotations = &entry["body"]["metadata"]["annotations"];
+        assert_eq!(annotations["argocd.argoproj.io/refresh"], "hard");
+        assert!(
+            annotations["argocd.argoproj.io/refresh-timestamp"].is_string(),
+            "{annotations}"
         );
     }
     assert!(app.marked.is_empty());
