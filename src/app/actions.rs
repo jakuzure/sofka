@@ -2422,8 +2422,10 @@ impl App {
         });
     }
 
-    /// Ask the ArgoCD controller to re-compare Applications against Git.
-    /// Nothing in the cluster changes, so it does not confirm.
+    /// Ask the ArgoCD controller to re-compare Applications against Git. The
+    /// patch only requests a comparison, so it does not confirm; with
+    /// automated sync enabled, an OutOfSync result then syncs (and prunes, if
+    /// configured) as the next periodic reconcile would.
     pub(super) fn do_argocd_refresh(&mut self, targets: Vec<(String, String)>, hard: bool) {
         let Some(kind) = self.kind.clone() else {
             return;
