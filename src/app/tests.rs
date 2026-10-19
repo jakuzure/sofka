@@ -7789,6 +7789,68 @@ async fn argocd_menu_sync_now_patches_without_prune() {
 }
 
 #[tokio::test]
+async fn argocd_menu_refresh_sets_annotation_without_confirming() {
+    let (mut app, mut rx, log) = argocd_patch_app(&["guestbook"]);
+
+    open_argocd_menu_item(&mut app, "Refresh");
+    assert_eq!(app.mode, Mode::Table, "a refresh does not confirm");
+    assert!(app.flash.contains("refreshing guestbook"), "{}", app.flash);
+    drain_until(&mut app, &mut rx, |app| {
+        app.flash.contains("refresh requested: guestbook")
+    })
+    .await;
+    assert!(!app.flash_err, "{}", app.flash);
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 1);
+    assert!(
+        log[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/namespaces/argocd/applications/guestbook"),
+        "{}",
+        log[0]["path"]
+    );
+    assert_eq!(
+        log[0]["body"],
+        json!({"metadata": {"annotations": {"argocd.argoproj.io/refresh": "normal"}}})
+    );
+    assert!(app.journal.lines().iter().any(|l| l.contains("refresh")));
+}
+
+#[tokio::test]
+async fn argocd_hard_refresh_patches_every_marked_application() {
+    let (mut app, mut rx, log) = argocd_patch_app(&["guestbook", "frontend", "backend"]);
+    app.marked.insert("argocd/guestbook".into());
+    app.marked.insert("argocd/frontend".into());
+
+    open_argocd_menu_item(&mut app, "Hard refresh");
+    assert_eq!(app.mode, Mode::Table);
+    assert!(
+        app.flash.contains("hard refreshing 2 applications"),
+        "{}",
+        app.flash
+    );
+    drain_until(&mut app, &mut rx, |app| {
+        app.flash.contains("hard refresh requested: 2 applications")
+    })
+    .await;
+    assert!(!app.flash_err, "{}", app.flash);
+    let log = log.lock().unwrap();
+    let mut paths: Vec<&str> = log.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    paths.sort();
+    assert_eq!(paths.len(), 2);
+    assert!(paths[0].ends_with("/applications/frontend"), "{paths:?}");
+    assert!(paths[1].ends_with("/applications/guestbook"), "{paths:?}");
+    for entry in log.iter() {
+        assert_eq!(
+            entry["body"],
+            json!({"metadata": {"annotations": {"argocd.argoproj.io/refresh": "hard"}}})
+        );
+    }
+    assert!(app.marked.is_empty());
+}
+
+#[tokio::test]
 async fn argocd_sync_with_prune_patches_every_marked_application() {
     let (mut app, mut rx, log) = argocd_patch_app(&["guestbook", "frontend", "backend"]);
     app.marked.insert("argocd/guestbook".into());

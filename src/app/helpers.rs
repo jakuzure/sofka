@@ -162,6 +162,15 @@ pub(super) fn argocd_sync_patch(prune: bool) -> Value {
     json!({ "operation": { "sync": { "prune": prune } } })
 }
 
+/// ArgoCD refresh patch. The application controller re-compares the
+/// Application against Git when it sees the `argocd.argoproj.io/refresh`
+/// annotation, then removes it. `hard` also invalidates the repo-server
+/// manifest cache first.
+pub(super) fn argocd_refresh_patch(hard: bool) -> Value {
+    let level = if hard { "hard" } else { "normal" };
+    json!({ "metadata": { "annotations": { "argocd.argoproj.io/refresh": level } } })
+}
+
 pub(super) fn external_secret_refresh_patch(force_sync: &str) -> Value {
     json!({
         "metadata": { "annotations": { "force-sync": force_sync } }

@@ -2232,6 +2232,10 @@ impl App {
                         let targets = self.action_targets();
                         self.do_flux_reconcile(targets, choice == Some("Force reconcile"));
                     }
+                    Some("Refresh" | "Hard refresh") => {
+                        let targets = self.action_targets();
+                        self.do_argocd_refresh(targets, choice == Some("Hard refresh"));
+                    }
                     Some("Sync now") => {
                         let targets = self.action_targets();
                         self.do_argocd_sync(targets, false);
@@ -2416,6 +2420,44 @@ impl App {
                     .await;
             }
         });
+    }
+
+    /// Ask the ArgoCD controller to re-compare Applications against Git.
+    /// Nothing in the cluster changes, so it does not confirm.
+    pub(super) fn do_argocd_refresh(&mut self, targets: Vec<(String, String)>, hard: bool) {
+        let Some(kind) = self.kind.clone() else {
+            return;
+        };
+        if targets.is_empty() {
+            return; // see `do_flux_suspend`
+        }
+        let (action, verb) = if hard {
+            ("hard refresh", "hard refreshing")
+        } else {
+            ("refresh", "refreshing")
+        };
+        let label = self.action_label(&targets);
+        self.note_action(action, label);
+        let progress = if targets.len() == 1 {
+            format!("{verb} {}…", targets[0].0)
+        } else {
+            format!("{verb} {} {}…", targets.len(), self.kind_plural)
+        };
+        let claim = self.claim_status(progress);
+        self.clear_marks();
+        let ok_message = if targets.len() == 1 {
+            format!("{action} requested: {}", targets[0].0)
+        } else {
+            format!("{action} requested: {} {}", targets.len(), self.kind_plural)
+        };
+        self.spawn_patch_action(
+            kind,
+            targets,
+            Patch::Merge(argocd_refresh_patch(hard)),
+            claim,
+            ok_message,
+            move |name, _, e| format!("{action} {name} failed: {e}"),
+        );
     }
 
     /// Trigger an ArgoCD Application sync by patching the top-level `operation`
