@@ -55,8 +55,10 @@ nix-build: nix::build
 # Build and smoke-test the Nix package.
 nix-smoke: nix::smoke
 
-# Cut a release with vesnik.
+# Cut a release with vesnik from an up-to-date main.
 release:
+    @test "$(git branch --show-current)" = main || { echo "release from main" >&2; exit 1; }
+    git pull --ff-only origin main
     cargo check --quiet
     cargo test --quiet
     vesnik release --yes
