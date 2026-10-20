@@ -2,7 +2,6 @@ set unstable
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 mod nix '.just/nix.just'
-mod release '.just/release.just'
 mod rust '.just/rust.just'
 
 default:
@@ -56,11 +55,8 @@ nix-build: nix::build
 # Build and smoke-test the Nix package.
 nix-smoke: nix::smoke
 
-# Release a patch version.
-release-patch: release::patch
-
-# Release a minor version.
-release-minor: release::minor
-
-# Release a major version.
-release-major: release::major
+# Cut a release with vesnik.
+release:
+    cargo check --quiet
+    cargo test --quiet
+    vesnik release --yes
