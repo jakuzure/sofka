@@ -38,6 +38,19 @@ Script generation does not load the sofka configuration or connect to a cluster.
 The generated scripts call `sofka` when you press Tab. Generate them again after
 an update, as shown below.
 
+## Nix package
+
+The Nix package (`nix build`, the flake's overlay, or the Home Manager module)
+installs the Bash, Fish and Zsh scripts, so shells that read completions from
+installed packages need no setup. Fish reads them from `vendor_completions.d`;
+Bash needs bash-completion; Zsh needs the package's `share/zsh/site-functions`
+on `fpath` before `compinit` (Home Manager and NixOS set this up). The scripts
+call the installed `sofka` when you press Tab, so they stay in sync after an
+update. Don't also add the lines below, or the completion is registered twice.
+A cross-compiled package has no scripts: set it up as below.
+
+## Other installations
+
 Use the instructions for your shell below. Make sure `sofka` is on `PATH` when
 the shell starts. These commands generate the script at shell startup, so
 completion stays in sync after a sofka update.

@@ -107,6 +107,16 @@
             module = self.homeManagerModules.default;
             package = self.packages.${system}.sofka;
           };
+          completions =
+            pkgs.runCommand "sofka-completions-check" { nativeBuildInputs = [ pkgs.fish ]; } ''
+              share=${self.packages.${system}.sofka}/share
+              for f in bash-completion/completions/sofka.bash fish/vendor_completions.d/sofka.fish \
+                zsh/site-functions/_sofka; do
+                test -s "$share/$f" || { echo "missing or empty: $f"; exit 1; }
+              done
+              fish --no-config -n "$share/fish/vendor_completions.d/sofka.fish"
+              touch $out
+            '';
           fmt =
             pkgs.runCommand "sofka-fmt-check"
               {
