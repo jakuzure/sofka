@@ -1096,7 +1096,14 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                     (Action::Describe, "describe"),
                 ],
             ),
-            hint_line(app, &[(Action::Edit, "edit"), (Action::Delete, "delete")]),
+            hint_line(
+                app,
+                &[
+                    (Action::Edit, "edit"),
+                    (Action::Delete, "delete"),
+                    (Action::NsResources, "resources"),
+                ],
+            ),
         ],
         "helm" => vec![
             hint_line(app, &[(Action::Open, "history")]),
@@ -7232,6 +7239,16 @@ mod tests {
         let text: Vec<String> = header_hints(&app).iter().map(line_text).collect();
         let text = text.join("\n");
         assert!(text.contains("i version"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn namespace_rows_hint_the_ns_resources_key() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut app = App::new(crate::k8s::Cluster::fake(), tx);
+        app.switch_kind("namespaces");
+        let text: Vec<String> = header_hints(&app).iter().map(line_text).collect();
+        let text = text.join("\n");
+        assert!(text.contains("R resources"), "{text}");
     }
 
     #[tokio::test]
