@@ -25,6 +25,9 @@ explain.rs   Deterministic "why is this unhealthy?" analysis — pure, turns
 adjacent.rs  Which objects connect to which: built-in and configured reference
              rules, child kinds, JSON-Pointer fan-out — pure, unit-tested.
              `app/adjacent.rs` gathers the objects and drives the view.
+jump.rs      Jump codes: which part of each on-screen name sets it apart
+             from the others — pure, unit-tested. `app/jump.rs` freezes
+             the codes and matches typed characters against them.
 timeline.rs  Session-local per-object state-change history diffed from the
              watch stream (pure transition logic, unit-tested).
 pvcexplore.rs PVC browsing: which pod already mounts a claim, the helper pod

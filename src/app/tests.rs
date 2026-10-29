@@ -13,6 +13,7 @@ mod credentials;
 mod dir;
 mod exec_auth;
 mod flux;
+mod jump;
 mod kubeconfig;
 mod label_filter;
 mod log_follow;
@@ -34984,6 +34985,10 @@ fn key_action_fixture(scope: &str) -> (App, Receiver<Msg>) {
         "table" => Mode::Table,
         "command" => Mode::Command,
         "filter" => Mode::Filter,
+        "jump" => {
+            app.start_jump();
+            Mode::Jump
+        }
         "detail" => Mode::Detail,
         "diff" => Mode::Diff,
         "events" => Mode::Events,

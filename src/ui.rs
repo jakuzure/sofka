@@ -227,7 +227,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
     let compact = app.compact;
     let needs_prompt = matches!(
         app.mode,
-        Mode::Command | Mode::Filter | Mode::LogFilter | Mode::DocFilter
+        Mode::Command | Mode::Filter | Mode::Jump | Mode::LogFilter | Mode::DocFilter
     );
 
     // Fullscreen logs (F): the pane takes the whole frame — no header, status
@@ -1571,6 +1571,9 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     let cell_cache = app.table_cell_cache();
     // Decided once per frame so an unfiltered table never asks per cell.
     let highlight = app.filter_highlights();
+    // While jumping, a row whose next character to type is cut off from its
+    // NAME cell shows that character at the left edge instead.
+    let mut jump_gutter = Vec::with_capacity(visible_objects.len());
 
     let rows: Vec<Vec<RenderCell>> = visible_objects
         .iter()
@@ -1602,6 +1605,20 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                     cells.push(TableCellText::Borrowed(cell.as_str()));
                 }
             }
+            let jump_marks = app.jump_marks(&row_key, pf_name);
+            let jump_in_name = jump_marks.clone().filter(|marks| {
+                let shown: String = pf_name.chars().take(marks.end).collect();
+                let marker = if forwarded { 2 } else { 0 };
+                cells.get(name_col).is_some_and(|c| c.as_str() == pf_name)
+                    && shown.width() + marker <= usize::from(widths[name_col])
+            });
+            jump_gutter.push(jump_marks.filter(|_| jump_in_name.is_none()).map(|marks| {
+                pf_name
+                    .chars()
+                    .skip(marks.start)
+                    .take(marks.len().min(2))
+                    .collect()
+            }));
             // Combined colorer: the whole row takes a k9s-style status tint
             // (errors red, pending peach, completed/terminating dimmed, healthy
             // blue), but a handful of columns keep their own visibility
@@ -1635,7 +1652,13 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                     let align = align_of(i);
                     if i == name_col && (marked_row || Some(i) != style_idx) {
                         let base = if marked_row { theme::mark() } else { row_color };
-                        let cell = render_name_cell(app, c.as_str(), base, forwarded);
+                        let cell = render_name_cell(
+                            app,
+                            c.as_str(),
+                            base,
+                            forwarded,
+                            jump_in_name.clone(),
+                        );
                         return if marked_row {
                             cell.style(
                                 Style::default()
@@ -1768,6 +1791,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
             offset: col_offset,
             selected: render_selected,
             selected_marked,
+            jump_gutter,
         },
         inner,
     );
@@ -1865,6 +1889,7 @@ struct ScrollingTable<'a> {
     offset: usize,
     selected: Option<usize>,
     selected_marked: bool,
+    jump_gutter: Vec<Option<String>>,
 }
 
 impl ratatui::widgets::Widget for ScrollingTable<'_> {
@@ -1899,6 +1924,19 @@ impl ratatui::widgets::Widget for ScrollingTable<'_> {
             buf.set_style(Rect::new(area.x, y_pos, area.width, 1), style);
             if selected {
                 buf.set_stringn(area.x, y_pos, "▌ ", usize::from(area.width), style);
+            }
+            if let Some(code) = y
+                .checked_sub(1)
+                .and_then(|row| self.jump_gutter.get(row))
+                .and_then(Option::as_deref)
+            {
+                buf.set_stringn(
+                    area.x,
+                    y_pos,
+                    code,
+                    usize::from(area.width).min(2),
+                    jump_code(style),
+                );
             }
             for &(start, end, index, source_start) in &ranges {
                 source.reset();
@@ -2064,21 +2102,65 @@ fn pod_readiness_blocked(obj: &kube::core::DynamicObject) -> bool {
 /// row filter (bold yellow) so a scan across many filtered results is
 /// faster — every visible row already matched, this just shows *where*.
 /// Falls back to a flat `base`-colored cell when there's no active filter.
-fn render_name_cell(app: &App, name: &str, base: Color, forwarded: bool) -> RenderCell<'static> {
+fn render_name_cell(
+    app: &App,
+    name: &str,
+    base: Color,
+    forwarded: bool,
+    jump: Option<std::ops::Range<usize>>,
+) -> RenderCell<'static> {
     // A teal ● prepended when a port-forward is active for this row.
-    let marker = if forwarded {
+    let mut spans = if forwarded {
         vec![Span::styled("● ", Style::default().fg(theme::teal()))]
     } else {
         Vec::new()
     };
-    let Some(matched) = app.filter_match_indices(name).filter(|idx| !idx.is_empty()) else {
-        let mut spans = marker;
-        spans.push(Span::styled(name.to_string(), Style::default().fg(base)));
-        return RenderCell::from(Line::from(spans));
-    };
-    let mut spans = marker;
-    push_match_spans(&mut spans, name, &matched, Style::default().fg(base));
+    let mut name_spans = Vec::new();
+    match app.filter_match_indices(name).filter(|idx| !idx.is_empty()) {
+        Some(matched) => {
+            push_match_spans(&mut name_spans, name, &matched, Style::default().fg(base))
+        }
+        None => name_spans.push(Span::styled(name.to_string(), Style::default().fg(base))),
+    }
+    spans.extend(match jump {
+        Some(marks) => mark_jump_code(name_spans, marks),
+        None => name_spans,
+    });
     RenderCell::from(Line::from(spans))
+}
+
+/// How the characters still to type in a jump stand out: a colored block,
+/// which stays visible on the selected row whose colors replace the text's.
+fn jump_code(style: Style) -> Style {
+    style
+        .fg(theme::pink())
+        .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+}
+
+/// Split `spans` so the chars in `marks`, counted across all of them, take
+/// the jump style.
+fn mark_jump_code(spans: Vec<Span<'static>>, marks: std::ops::Range<usize>) -> Vec<Span<'static>> {
+    let mut out = Vec::with_capacity(spans.len() + 2);
+    let mut seen = 0;
+    for span in spans {
+        let chars: Vec<char> = span.content.chars().collect();
+        let from = marks.start.saturating_sub(seen).min(chars.len());
+        let to = marks.end.saturating_sub(seen).min(chars.len());
+        seen += chars.len();
+        if from == to {
+            out.push(span);
+            continue;
+        }
+        let part = |range: std::ops::Range<usize>| chars[range].iter().collect::<String>();
+        if from > 0 {
+            out.push(Span::styled(part(0..from), span.style));
+        }
+        out.push(Span::styled(part(from..to), jump_code(span.style)));
+        if to < chars.len() {
+            out.push(Span::styled(part(to..chars.len()), span.style));
+        }
+    }
+    out
 }
 
 /// A non-NAME table cell with the active row filter's matched characters
@@ -6287,6 +6369,27 @@ fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
             }
             Line::from(spans)
         }
+        Mode::Jump => Line::from(vec![
+            Span::styled(
+                "jump: ",
+                Style::default()
+                    .fg(theme::yellow())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                app.jump_typed().to_string(),
+                Style::default().fg(theme::text()),
+            ),
+            Span::styled("█", Style::default().fg(theme::yellow())),
+            Span::styled(
+                format!(
+                    "  type the highlighted characters · {} first match · {} cancel",
+                    app.keymap.label("jump", Action::Accept),
+                    app.keymap.label("jump", Action::Back)
+                ),
+                theme::dim(),
+            ),
+        ]),
         Mode::LogFilter => Line::from(vec![
             Span::styled(
                 "log filter (text · /re/ · !invert) /",

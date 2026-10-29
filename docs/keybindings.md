@@ -485,6 +485,14 @@ for those operations.
 | `previous_section` | `[`                           |
 | `up`               | `k`, `up`                     |
 
+### `[keys.jump]`
+
+| Action      | Default bindings      |
+| ----------- | --------------------- |
+| `accept`    | `enter`               |
+| `back`      | `esc`                 |
+| `backspace` | `backspace`, `ctrl-h` |
+
 ### `[keys.log_filter]`
 
 | Action      | Default bindings      |
@@ -679,6 +687,7 @@ for those operations.
 | `history_forward`    | `]`                  |
 | `inspect`            | `x`                  |
 | `invert_sort`        | `I`                  |
+| `jump`               | `v`                  |
 | `last`               | `G`, `end`           |
 | `left`               | `left`               |
 | `logs`               | `l`                  |

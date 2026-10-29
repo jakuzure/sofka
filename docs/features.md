@@ -424,6 +424,16 @@ include those conditions. Row filters can search the route paths.
   namespaces, Flux objects) in every namespace at once, concurrently. Results
   rank by fuzzy score, `⏎` jumps to the object. When a kind can't be listed
   (RBAC), the result says it's incomplete instead of pretending otherwise.
+- **Jump to a row** (`v`) - every row on screen gets a short code from the
+  part of its name that sets it apart: the random suffix of a generated pod
+  name (`api-7d8f9b5c4-xk2lp` → `x`), the ordinal of a StatefulSet pod, or the
+  start of a name no other row shares. The characters still to type are
+  highlighted in their own color in the name, or shown at the left edge when
+  the name is cut off.
+  Each typed character narrows the rows; when one is left, the cursor moves
+  there. `⏎` takes the first remaining row, `backspace` takes a character
+  back, and `esc` cancels. Codes are fixed when the jump starts and stay with
+  their object, so a watch update while typing does not move them.
 - **Multiselect** (`space`) for bulk delete/kill/suspend/resume/reconcile.
   `Shift+ArrowUp` / `Shift+ArrowDown` extend or reduce a range from a fixed
   starting row. Separate marks remain selected when the range contracts.

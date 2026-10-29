@@ -44,7 +44,7 @@ impl App {
             // dialog raised from the PVC browser, which returns there. Getting
             // this wrong reads as "left the view" and stops a running plugin.
             Mode::Confirm | Mode::Prompt | Mode::PluginForm => self.overlay_return(),
-            Mode::Filter | Mode::SortPicker | Mode::CopyPicker => Mode::Table,
+            Mode::Filter | Mode::Jump | Mode::SortPicker | Mode::CopyPicker => Mode::Table,
             other => other,
         };
         let run = self.plugin_run;
@@ -97,6 +97,7 @@ impl App {
             Mode::Command
                 | Mode::Help
                 | Mode::Filter
+                | Mode::Jump
                 | Mode::DocFilter
                 | Mode::LogFilter
                 | Mode::Confirm
@@ -222,6 +223,7 @@ impl App {
             Mode::Table => self.key_table(key),
             Mode::Command => self.key_command(key),
             Mode::Filter => self.key_filter(key),
+            Mode::Jump => self.key_jump(key),
             Mode::Detail | Mode::Diff | Mode::Events => self.key_scroll(key, true),
             Mode::Logs => self.key_logs(key),
             Mode::LogFilter => self.key_log_filter(key),
@@ -290,6 +292,7 @@ impl App {
             Mode::Table => "table",
             Mode::Command => "command",
             Mode::Filter => "filter",
+            Mode::Jump => "jump",
             Mode::Detail => "detail",
             Mode::Diff => "diff",
             Mode::Events => "events",
@@ -427,6 +430,7 @@ impl App {
             }
             (Some(Action::NsResources), _) => self.open_ns_resources_for_row(),
             (Some(Action::Filter), _) => self.mode = Mode::Filter,
+            (Some(Action::Jump), _) => self.start_jump(),
             (Some(Action::Exit), _) => self.should_quit = true,
             (Some(Action::Back), _) => {
                 if !self.marked.is_empty() {

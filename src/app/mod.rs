@@ -185,6 +185,8 @@ pub enum Mode {
     Table,
     Command,
     Filter,
+    /// Typing the highlighted part of a row's name to move the cursor there.
+    Jump,
     Detail,
     Logs,
     LogFilter,
@@ -2113,6 +2115,8 @@ pub struct App {
     pub col_offset: usize,
     pub col_scroll_max: usize,
     pub filter: String,
+    /// The rows and typed characters of an active jump (`Mode::Jump`).
+    jump: jump::Jump,
     pub faults_only: bool,
     /// Set while the `:workloads` view is open.
     workloads: Option<workloads::WorkloadsView>,
@@ -2732,6 +2736,7 @@ impl App {
             col_offset: 0,
             col_scroll_max: 0,
             filter: String::new(),
+            jump: jump::Jump::default(),
             faults_only: false,
             workloads: None,
             ns_resources: ns_resources::State::default(),
@@ -3120,6 +3125,7 @@ pub(crate) mod guardrails;
 mod helpers;
 mod input;
 mod journal;
+mod jump;
 mod layouts;
 mod lifecycle;
 mod log_follow;

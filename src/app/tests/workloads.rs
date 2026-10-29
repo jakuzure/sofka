@@ -651,3 +651,22 @@ async fn notify_with_a_note_watches_the_selected_row_kind() {
     assert!(app.notify_tasks.is_empty(), "{}", app.flash);
     assert!(app.notify_notes.is_empty());
 }
+
+#[tokio::test]
+async fn jump_reaches_rows_of_every_kind_in_the_workloads_view() {
+    let (mut app, _rx) = workloads_app();
+    apply_workload(&mut app, deployment("api", 2));
+    apply_workload(&mut app, pod("web-x2k4p", None));
+    let api = rows(&app).iter().position(|(_, n)| n == "api").unwrap();
+    app.table_state.select(Some(api));
+    app.handle_key(press(KeyCode::Char('v'))).unwrap();
+    assert_eq!(app.mode, Mode::Jump);
+    // A watch update while typing, with the cursor on a Deployment.
+    apply_workload(&mut app, deployment("cache", 1));
+    app.handle_key(press(KeyCode::Char('w'))).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert!(!app.flash.contains("gone"), "{}", app.flash);
+    let selected = app.selected_ref().and_then(|o| o.metadata.name.clone());
+    assert_eq!(selected.as_deref(), Some("web-x2k4p"));
+    assert_eq!(app.kind_plural, crate::app::workloads::VIEW);
+}
