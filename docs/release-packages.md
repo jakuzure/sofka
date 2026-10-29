@@ -106,7 +106,17 @@ The GNU builds cannot require a GLIBC symbol newer than 2.35.
 
 ## Windows
 
-Extract the complete ZIP into a directory you own. Run `sofka.exe` from
+Install with [Scoop](https://scoop.sh) from the project bucket:
+
+```powershell
+scoop bucket add sofka https://github.com/nklmilojevic/scoop-sofka
+scoop install sofka/sofka
+```
+
+`scoop update sofka` upgrades it. The bucket checks for new releases every two
+hours, so a new version can take that long to show up in Scoop.
+
+Without Scoop, extract the complete ZIP into a directory you own. Run `sofka.exe` from
 PowerShell or Windows Terminal. Add that directory to your user `PATH` if
 you want to run `sofka` from other directories.
 

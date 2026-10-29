@@ -1,8 +1,8 @@
 //! Release update checks: is a newer sofka published, and how would this
 //! install upgrade to it.
 //!
-//! sofka never downloads or replaces itself. Homebrew, Nix, Cargo, winget, and
-//! the distro packages each track the installed binary, so the check only
+//! sofka never downloads or replaces itself. Homebrew, Nix, Cargo, winget, Scoop,
+//! and the distro packages each track the installed binary, so the check only
 //! reports the latest release and the upgrade command for the install method
 //! the running executable came from. The background check runs at most once
 //! per [`CHECK_INTERVAL`]; the result is cached under the state directory so
@@ -164,6 +164,7 @@ pub enum InstallMethod {
     Nix,
     Cargo,
     Winget,
+    Scoop,
     Package,
     Unknown,
 }
@@ -188,6 +189,8 @@ impl InstallMethod {
             Self::Homebrew
         } else if lower.contains("/microsoft/winget/") {
             Self::Winget
+        } else if lower.contains("/scoop/apps/sofka/") {
+            Self::Scoop
         } else if cargo_home.is_some_and(|home| exe.starts_with(home.join("bin")))
             || path.contains("/.cargo/bin/")
         {
@@ -206,6 +209,7 @@ impl InstallMethod {
             Self::Nix => "update the sofka flake input or Nix profile".into(),
             Self::Cargo => "cargo install sofka --locked".into(),
             Self::Winget => "winget upgrade nklmilojevic.sofka".into(),
+            Self::Scoop => "scoop update sofka".into(),
             Self::Package | Self::Unknown => format!("download it from {}", release.url),
         }
     }
@@ -424,6 +428,14 @@ mod tests {
             ),
             InstallMethod::Winget
         );
+        assert_eq!(
+            detect(r"C:\Users\me\scoop\apps\sofka\0.32.0\sofka.exe"),
+            InstallMethod::Scoop
+        );
+        assert_eq!(
+            detect(r"\\?\C:\ProgramData\scoop\apps\sofka\current\sofka.exe"),
+            InstallMethod::Scoop
+        );
         assert_eq!(detect("/usr/bin/sofka"), InstallMethod::Package);
         assert_eq!(detect("/usr/local/bin/sofka"), InstallMethod::Unknown);
         assert_eq!(
@@ -440,6 +452,14 @@ mod tests {
         assert_eq!(
             InstallMethod::Unknown.upgrade_hint(&release("9.0.0")),
             format!("download it from {RELEASES_URL}/tag/v9.0.0")
+        );
+    }
+
+    #[test]
+    fn scoop_installs_upgrade_with_scoop() {
+        assert_eq!(
+            InstallMethod::Scoop.upgrade_hint(&release("9.0.0")),
+            "scoop update sofka"
         );
     }
 

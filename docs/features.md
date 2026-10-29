@@ -1235,7 +1235,7 @@ read-only mode and recorded in `:journal`.
 - **Update notifications** (`:check-update`, or `sofka check-update`) - sofka
   checks GitHub for a newer release once a day at startup. A newer release
   appears in the header and on the status bar with the upgrade command for the
-  install method: Homebrew, Nix, Cargo, winget, or a download link for distro
+  install method: Homebrew, Nix, Cargo, winget, Scoop, or a download link for distro
   packages and other installs. `:info` shows the latest known release and its
   notes link. sofka never downloads or installs a release itself. Set
   `update_check = false` to turn off the startup check. See
