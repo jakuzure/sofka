@@ -271,6 +271,12 @@ include those conditions. Row filters can search the route paths.
   stream errors. List requests retain gzip compression. TCP keepalive fails
   connections to a peer that stopped answering, and the watch restarts on its
   own after the machine wakes from sleep on macOS and Linux.
+- **List-only RBAC** - when RBAC allows `list` but refuses `watch`, the view
+  lists its objects every 2 seconds instead and shows adds, changes, and
+  deletes from each list. The header shows `polling 2s (watch forbidden)`
+  next to the count and the status bar shows `● polling` instead of `● live`.
+  A refused list is still an error. A context, namespace, or kind switch stops
+  the poll like it stops a watch.
 - **Curated columns** for common kinds (pods, deployments, replicasets,
   statefulsets, daemonsets, services, nodes, namespaces, configmaps, secrets,
   jobs, cronjobs, PVC/PV, ingresses, endpoints, CustomResourceDefinitions,

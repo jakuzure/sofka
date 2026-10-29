@@ -417,6 +417,29 @@ async fn run_main(args: Args) -> Result<()> {
             Ok(ns) => println!("  namespaces: {}", ns.len()),
             Err(e) => println!("  namespaces: error: {e}"),
         }
+        let resource = args.launch_resource(cfg.default_resource.as_deref());
+        let namespace = starting_namespace(
+            &args,
+            &cfg,
+            &cluster.context,
+            Some(cluster.default_namespace.clone()),
+        );
+        println!(
+            "  watch:      {resource} in {}",
+            if namespace.is_empty() {
+                "all namespaces"
+            } else {
+                &namespace
+            }
+        );
+        let probe = cluster
+            .probe_watch(&resource, &namespace, diagnostics::WATCH_PROBE_TIMEOUT)
+            .await;
+        for line in
+            diagnostics::watch_probe_lines(&probe, &resource, diagnostics::WATCH_PROBE_TIMEOUT)
+        {
+            println!("{line}");
+        }
         applog::shutdown();
         return Ok(());
     }

@@ -2337,6 +2337,9 @@ pub struct App {
     /// count next to a flat error count is the signature of a flaky connection
     /// rather than a broken one, which is why `:info` reports them apart.
     pub watch_reconnects: u64,
+    /// RBAC refused a watch behind the current view, which now polls with a
+    /// list instead. Cleared with the generation that started it.
+    pub watch_polling: bool,
     /// The most recent error message, for `:info` diagnostics.
     pub last_error: Option<String>,
     /// The most recent failure to persist a small UI-state file (namespace,
@@ -2840,6 +2843,7 @@ impl App {
             journal: crate::journal::Journal::default(),
             watch_errors: 0,
             watch_reconnects: 0,
+            watch_polling: false,
             last_error: None,
             last_state_write_error: None,
             metrics_seen: false,

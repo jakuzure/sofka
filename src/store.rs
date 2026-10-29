@@ -81,6 +81,11 @@ pub enum Msg {
     WatchRecovered {
         generation: u64,
     },
+    /// RBAC refused the watch but allows the list, so the view is now kept
+    /// current by a list every [`crate::k8s::POLL_INTERVAL`] instead.
+    WatchPolling {
+        generation: u64,
+    },
     LogLines {
         generation: u64,
         lines: Vec<String>,

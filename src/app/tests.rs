@@ -132,7 +132,7 @@ async fn mock_pods_api() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
                     requests.push(path.clone());
                     requests
                         .iter()
-                        .filter(|p| !p.contains("watch=true"))
+                        .filter(|p| p.contains("/pods") && !p.contains("watch=true"))
                         .count()
                 };
                 let (status, body) = if path.contains("watch=true") {
