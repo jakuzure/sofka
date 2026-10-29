@@ -2454,6 +2454,8 @@ pub struct App {
     /// Badges for `:ctx` picker rows, keyed by context name. Resolved
     /// off-thread after the context list arrives.
     pub ctx_badges: HashMap<String, crate::config::ContextBadge>,
+    /// Bumped per badge resolution so only the latest result lands.
+    pub(crate) ctx_badge_request: u64,
 
     /// Current images aligned with `container_list`, for the Set-Image picker.
     pub image_values: Vec<String>,
@@ -2893,6 +2895,7 @@ impl App {
             readonly_override: None,
             context_badge: None,
             ctx_badges: HashMap::new(),
+            ctx_badge_request: 0,
             image_values: Vec::new(),
             image_target: None,
             metrics: HashMap::new(),

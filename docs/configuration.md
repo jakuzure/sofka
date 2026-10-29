@@ -395,7 +395,10 @@ color = "red"    # optional skin color name
 ```
 
 The badge shows as `[prod]` after the context name in the header and in the
-compact one-line header, next to `[read-only]` when both apply. Each row of the
+compact one-line header, next to `[read-only]` when both apply. On a narrow
+terminal the label is shortened, or hidden, so the read-only marker stays
+visible. `:info` redacts addresses and credentials in the label like the rest of
+its header. Each row of the
 `:ctx` picker shows the badge of that context, so you can see it before you
 switch. Contexts without a badge look unchanged.
 

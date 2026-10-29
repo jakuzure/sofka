@@ -102,6 +102,7 @@ async fn context_picker_rows_show_each_contexts_badge() {
     let badges = app.config.context_badges(&contexts);
     app.handle_msg(Msg::ContextBadges {
         generation: app.generation,
+        request: app.ctx_badge_request,
         badges,
     });
     let (line, color) = find(&mut app, "[prod admin]").unwrap();
@@ -175,5 +176,147 @@ async fn reload_applies_an_edited_badge() {
     let (line, color) = find(&mut app, "[local]").unwrap();
     assert!(line.contains("test  [local]"), "{line}");
     assert_eq!(color, theme::green());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn badge(label: &str) -> crate::config::ContextBadge {
+    crate::config::ContextBadge {
+        label: label.into(),
+        color: None,
+    }
+}
+
+fn badges(entries: &[(&str, &str)]) -> HashMap<String, crate::config::ContextBadge> {
+    entries
+        .iter()
+        .map(|(context, label)| (context.to_string(), badge(label)))
+        .collect()
+}
+
+#[tokio::test]
+async fn picker_keeps_only_the_latest_badge_result() {
+    let (mut app, _rx) = test_app();
+    palette(&mut app, "ctx");
+    let first = app.ctx_badge_request;
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    palette(&mut app, "ctx");
+    assert_eq!(app.mode, Mode::Contexts);
+    let second = app.ctx_badge_request;
+    assert_ne!(first, second);
+    app.handle_msg(Msg::Contexts {
+        generation: app.generation,
+        list: vec!["prod".into(), "test".into()],
+    });
+    app.handle_msg(Msg::ContextBadges {
+        generation: app.generation,
+        request: second,
+        badges: badges(&[("prod", "new")]),
+    });
+    app.handle_msg(Msg::ContextBadges {
+        generation: app.generation,
+        request: first,
+        badges: badges(&[("prod", "old")]),
+    });
+    let (line, _) = find(&mut app, "[new]").expect("the latest result stays");
+    assert!(line.contains("prod  [new]"), "{line}");
+    assert!(find(&mut app, "[old]").is_none());
+}
+
+#[tokio::test]
+async fn renamed_context_keeps_its_badge_and_drops_results_in_flight() {
+    let (mut app, _rx) = test_app();
+    palette(&mut app, "ctx");
+    let before = app.ctx_badge_request;
+    app.handle_msg(Msg::Contexts {
+        generation: app.generation,
+        list: vec!["prod".into(), "test".into()],
+    });
+    app.handle_msg(Msg::ContextBadges {
+        generation: app.generation,
+        request: before,
+        badges: badges(&[("prod", "prod")]),
+    });
+    let claim = app.claim_status("renaming prod → live…");
+    app.handle_msg(Msg::ContextRenamed {
+        generation: app.generation,
+        claim,
+        old: "prod".into(),
+        new: "live".into(),
+        result: Ok(()),
+    });
+    let (line, _) = find(&mut app, "[prod]").expect("the renamed row keeps its badge");
+    assert!(line.contains("live  [prod]"), "{line}");
+    assert_ne!(app.ctx_badge_request, before, "renaming re-resolves badges");
+    app.handle_msg(Msg::ContextBadges {
+        generation: app.generation,
+        request: before,
+        badges: badges(&[("prod", "prod")]),
+    });
+    assert!(find(&mut app, "live  [prod]").is_some());
+    app.handle_msg(Msg::ContextBadges {
+        generation: app.generation,
+        request: app.ctx_badge_request,
+        badges: badges(&[("live", "live")]),
+    });
+    let (line, _) = find(&mut app, "[live]").unwrap();
+    assert!(line.contains("live  [live]"), "{line}");
+}
+
+#[tokio::test]
+async fn info_redacts_the_badge_label_in_the_header() {
+    let dir = badge_dir("redact");
+    write_config(
+        &dir.join("clusters/test-cluster/prod"),
+        "[context_badge]\nlabel = \"prod 10.20.30.40\"\n",
+    );
+    let (mut app, _rx) = test_app();
+    app.all_contexts = vec!["prod".into(), "test".into()];
+    app.config = crate::config::ConfigLoader::from_dir(Some(dir.clone()));
+    app.switch_kind("pods");
+    switch_to(&mut app, "prod");
+    assert!(context_line(&mut app).contains("[prod 10.20.30.40]"));
+    for compact in [false, true] {
+        app.compact = compact;
+        palette(&mut app, "info");
+        assert_eq!(app.mode, Mode::Detail);
+        let (line, _) = find(&mut app, "[prod ").expect("the badge still shows");
+        assert!(!line.contains("10.20.30.40"), "{line}");
+        app.handle_key(press(KeyCode::Esc)).unwrap();
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_long_badge_never_hides_the_read_only_marker() {
+    let dir = badge_dir("narrow");
+    write_config(
+        &dir.join("clusters/test-cluster"),
+        "readonly = true\n[context_badge]\nlabel = \"production-eu-west-1-primary\"\n",
+    );
+    let (mut app, _rx) = test_app();
+    app.config = crate::config::ConfigLoader::from_dir(Some(dir.clone()));
+    app.switch_kind("pods");
+    palette(&mut app, "reload");
+    assert!(app.readonly);
+    for (compact, width) in [(false, 80), (true, 60)] {
+        app.compact = compact;
+        let screen = screen_text(&mut app, width, 20);
+        let marker = if compact { "[ro]" } else { "[read-only]" };
+        let line = screen
+            .lines()
+            .find(|line| line.contains("[produc"))
+            .unwrap_or_else(|| panic!("badge is shown:\n{screen}"));
+        assert!(line.contains("…]"), "the label is clipped: {line}");
+        assert!(line.contains(marker), "{line}");
+    }
+    // Too narrow for even a clipped badge: it gives way to the marker.
+    app.compact = false;
+    let screen = screen_text(&mut app, 60, 20);
+    let line = screen
+        .lines()
+        .find(|line| line.contains("Context:"))
+        .unwrap();
+    assert!(line.contains("test  [read-only]"), "{line}");
+    assert!(!line.contains('…'), "{line}");
     std::fs::remove_dir_all(dir).unwrap();
 }

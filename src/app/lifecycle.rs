@@ -2176,7 +2176,11 @@ impl App {
                     self.ctx_state.select(Some(idx));
                 }
             }
-            Msg::ContextBadges { generation, badges } if generation == self.generation => {
+            Msg::ContextBadges {
+                generation,
+                request,
+                badges,
+            } if generation == self.generation && request == self.ctx_badge_request => {
                 self.ctx_badges = badges;
             }
             Msg::ContextRenamed {
@@ -2195,6 +2199,12 @@ impl App {
                         }
                         list.sort();
                     }
+                    // Keep the row's badge until the new name's overrides
+                    // are resolved, which also drops any result in flight.
+                    if let Some(badge) = self.ctx_badges.remove(&old) {
+                        self.ctx_badges.insert(new.clone(), badge);
+                    }
+                    self.refresh_context_badges();
                     if self.mode == Mode::Contexts {
                         let idx = self.filtered_contexts().iter().position(|c| *c == new);
                         self.ctx_state.select(Some(idx.unwrap_or(0)));

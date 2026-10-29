@@ -616,9 +616,19 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let mut context_line = field("Context:", app.cluster.context.clone(), theme::mauve());
-    if let Some(badge) = &app.context_badge {
+    let readonly_width = if app.readonly {
+        "  [read-only]".width()
+    } else {
+        0
+    };
+    let room = usize::from(info_width).saturating_sub(context_line.width() + 2 + readonly_width);
+    if let Some(badge) = app
+        .context_badge
+        .as_ref()
+        .and_then(|badge| context_badge_span(app, badge, room))
+    {
         context_line.push_span(Span::raw("  "));
-        context_line.push_span(context_badge_span(badge));
+        context_line.push_span(badge);
     }
     if app.readonly {
         context_line.push_span(Span::styled(
@@ -696,17 +706,27 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// `[label]` in the badge's skin color (plain text without one), bold so it
-/// reads as a tag rather than part of the context name.
-fn context_badge_span(badge: &crate::config::ContextBadge) -> Span<'static> {
+/// reads as a tag rather than part of the context name. The label is clipped
+/// to `width` columns so the read-only marker after it stays visible, and
+/// `None` when not even `[…]` fits. It is redacted like the context name.
+fn context_badge_span(
+    app: &App,
+    badge: &crate::config::ContextBadge,
+    width: usize,
+) -> Option<Span<'static>> {
+    if width < 3 {
+        return None;
+    }
+    let label = clip_to_width(&diagnostic_value(app, &badge.label), width - 2);
     let color = badge
         .color
         .as_deref()
         .and_then(theme::swatch)
         .unwrap_or_else(theme::text);
-    Span::styled(
-        format!("[{}]", badge.label),
+    Some(Span::styled(
+        format!("[{label}]"),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
-    )
+    ))
 }
 
 fn favorite_namespace_spans(app: &App, width: usize) -> Vec<Span<'static>> {
@@ -744,6 +764,9 @@ fn favorite_namespace_spans(app: &App, width: usize) -> Vec<Span<'static>> {
     spans
 }
 
+/// Columns the compact header keeps on the right for the live/sync dot.
+const COMPACT_SYNC_WIDTH: u16 = 10;
+
 /// The single-line header for compact mode (`ctrl-e`): kind · count ·
 /// namespace · context on the left; a transient flash and the live/sync dot on
 /// the right. Everything the full header shows that still matters when you've
@@ -776,9 +799,17 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::mauve()),
         ),
     ];
-    if let Some(badge) = &app.context_badge {
+    let readonly_width = if app.readonly { " [ro]".width() } else { 0 };
+    let used: usize = spans.iter().map(Span::width).sum();
+    let room = usize::from(area.width.saturating_sub(COMPACT_SYNC_WIDTH))
+        .saturating_sub(used + 1 + readonly_width);
+    if let Some(badge) = app
+        .context_badge
+        .as_ref()
+        .and_then(|badge| context_badge_span(app, badge, room))
+    {
         spans.push(Span::raw(" "));
-        spans.push(context_badge_span(badge));
+        spans.push(badge);
     }
     if app.readonly {
         spans.push(Span::styled(" [ro]", Style::default().fg(theme::red())));
@@ -817,7 +848,7 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
     };
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(10)])
+        .constraints([Constraint::Min(10), Constraint::Length(COMPACT_SYNC_WIDTH)])
         .split(area);
     frame.render_widget(Paragraph::new(Line::from(spans)), cols[0]);
     frame.render_widget(
@@ -3824,9 +3855,13 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
                     }),
                 ),
             ]);
-            if let Some(badge) = app.ctx_badges.get(c) {
+            if let Some(badge) = app
+                .ctx_badges
+                .get(c)
+                .and_then(|badge| context_badge_span(app, badge, usize::MAX))
+            {
                 line.push_span(Span::raw("  "));
-                line.push_span(context_badge_span(badge));
+                line.push_span(badge);
             }
             Text::from(line)
         })
