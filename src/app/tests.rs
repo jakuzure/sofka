@@ -7426,6 +7426,73 @@ async fn flux_menu_rejects_non_flux_kinds() {
 }
 
 #[tokio::test]
+async fn flux_tables_show_suspended_before_the_long_message() {
+    // Issue #978: SUSPENDED sat after MESSAGE, so a long message pushed it
+    // off the right edge.
+    let (mut app, _rx) = test_app();
+    app.cluster.register_kind(
+        "fluxcd.controlplane.io",
+        "ResourceSet",
+        "resourcesets",
+        true,
+    );
+    let message = "x".repeat(200);
+    for (command, plural, object, headers) in [
+        (
+            "kustomizations",
+            "kustomizations",
+            json!({
+                "apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+                "metadata": {"name": "infra", "namespace": "default"},
+                "spec": {"suspend": true},
+                "status": {
+                    "lastAppliedRevision": "main@sha1:abc",
+                    "conditions": [{"type": "Ready", "status": "True", "message": message}]
+                }
+            }),
+            vec!["NAME", "READY", "SUSPENDED", "MESSAGE", "REVISION", "AGE"],
+        ),
+        (
+            "resourcesets.fluxcd.io",
+            "resourcesets",
+            json!({
+                "apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+                "metadata": {
+                    "name": "apps", "namespace": "default",
+                    "annotations": {"fluxcd.controlplane.io/reconcile": "disabled"}
+                },
+                "status": {
+                    "lastAppliedRevision": "sha256:abc",
+                    "conditions": [{"type": "Ready", "status": "True", "message": message}]
+                }
+            }),
+            vec![
+                "NAME",
+                "READY",
+                "SUSPENDED",
+                "MESSAGE",
+                "REVISION",
+                "RESOURCES",
+                "AGE",
+            ],
+        ),
+    ] {
+        app.handle_key(press(KeyCode::Char(':'))).unwrap();
+        type_in_palette(&mut app, command);
+        app.handle_key(press(KeyCode::Enter)).unwrap();
+        assert_eq!(app.kind_plural, plural);
+        apply(&mut app, object);
+        assert_eq!(app.display_headers().to_vec(), headers, "{plural}");
+        let rows = app.rows();
+        app.ensure_table_cell_cache(&rows);
+        let cache = app.table_cell_cache();
+        let (cells, status_idx) = cache.get(&row_key(rows[0])).unwrap();
+        assert_eq!(cells[1..4], ["True", "true", message.as_str()], "{plural}");
+        assert_eq!(status_idx, Some(1), "{plural}");
+    }
+}
+
+#[tokio::test]
 async fn flux_menu_requires_explicit_choice_not_a_single_key() {
     let (mut app, _rx) = test_app();
     app.switch_kind("kustomizations");
