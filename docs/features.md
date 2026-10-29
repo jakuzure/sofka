@@ -453,6 +453,11 @@ include those conditions. Row filters can search the route paths.
   object ownership scope are cleared. Namespace selection follows the existing
   per-context rules. Explicit resource queries, bookmarks, and workspaces keep
   their specified destination.
+- **Context badge** - a `[context_badge]` override shows a label such as
+  `[prod]` next to the context name in the full and compact headers, beside
+  `[read-only]`. Each `:ctx` picker row shows the badge of that context before
+  you switch. The optional color is a skin color name. See
+  [Context badge](configuration.md#context-badge).
 - **Context picker at launch** - `sofka ctx` and `sofka contexts` open the picker
   before connecting to a cluster. Enter connects to the selected context and
   opens its configured default resource, or pods. `--context NAME` selects the
@@ -1241,7 +1246,7 @@ read-only mode and recorded in `:journal`.
 - **Update notifications** (`:check-update`, or `sofka check-update`) - sofka
   checks GitHub for a newer release once a day at startup. A newer release
   appears in the header and on the status bar with the upgrade command for the
-  install method: Homebrew, Nix, Cargo, winget, or a download link for distro
+  install method: Homebrew, Nix, Cargo, winget, Scoop, or a download link for distro
   packages and other installs. `:info` shows the latest known release and its
   notes link. sofka never downloads or installs a release itself. Set
   `update_check = false` to turn off the startup check. See
