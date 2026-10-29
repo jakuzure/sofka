@@ -1371,7 +1371,13 @@ impl Cluster {
                 msg = rx.recv() => match msg {
                     Some(Msg::Applied { .. }) => *objects += 1,
                     Some(Msg::Synced { .. }) => *synced = Some(started.elapsed()),
-                    Some(Msg::WatchPolling { .. }) => *polling = true,
+                    // The poll sends its whole first list after this, which
+                    // replaces whatever the refused watch's list counted.
+                    Some(Msg::WatchPolling { .. }) => {
+                        *polling = true;
+                        *objects = 0;
+                        *synced = None;
+                    }
                     Some(Msg::Reset { .. }) => {
                         *objects = 0;
                         *synced = None;
@@ -2440,49 +2446,55 @@ pub(crate) mod tests {
     use super::*;
 
     fn probe_cluster(streaming: bool, status: u16, delay: Duration) -> Cluster {
+        let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut cluster = Cluster::fake();
         cluster.client = Client::new(
-            tower::service_fn(move |req: http::Request<kube::client::Body>| async move {
-                let query = req.uri().query().unwrap_or("");
-                let watch = query.contains("watch=true");
-                let initial = query.contains("sendInitialEvents=true");
-                let (code, body) = if initial && streaming {
-                    (200, concat!(
+            tower::service_fn(move |req: http::Request<kube::client::Body>| {
+                let lists = Arc::clone(&lists);
+                async move {
+                    let query = req.uri().query().unwrap_or("");
+                    let watch = query.contains("watch=true");
+                    let initial = query.contains("sendInitialEvents=true");
+                    let (code, body) = if initial && streaming {
+                        (200, concat!(
                     "{\"type\":\"ADDED\",\"object\":{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"one\",\"resourceVersion\":\"1\"}}}\n",
                     "{\"type\":\"BOOKMARK\",\"object\":{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"resourceVersion\":\"1\",\"annotations\":{\"k8s.io/initial-events-end\":\"true\"}}}}\n"
                 ).to_string())
-                } else if initial {
-                    (400, r#"{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"BadRequest","message":"streaming lists unsupported","code":400}"#.into())
-                } else if watch {
-                    tokio::time::sleep(delay).await;
-                    (
-                        status,
-                        if status == 200 {
-                            String::new()
-                        } else {
-                            serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":if status == 403 { "Forbidden" } else { "ServiceUnavailable" },"message":"watch refused","code":status}).to_string()
-                        },
-                    )
-                } else {
-                    (200, r#"{"kind":"PodList","apiVersion":"v1","metadata":{"resourceVersion":"1"},"items":[{"apiVersion":"v1","kind":"Pod","metadata":{"name":"one","resourceVersion":"1"}}]}"#.into())
-                };
-                let keep_open = watch && code == 200;
-                let frames = futures_util::stream::iter([Ok::<_, std::io::Error>(
-                    hyper::body::Frame::data(hyper::body::Bytes::from(body)),
-                )])
-                .chain(futures_util::stream::poll_fn(move |_| {
-                    if keep_open {
-                        Poll::Pending
+                    } else if initial {
+                        (400, r#"{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"BadRequest","message":"streaming lists unsupported","code":400}"#.into())
+                    } else if watch {
+                        tokio::time::sleep(delay).await;
+                        (
+                            status,
+                            if status == 200 {
+                                String::new()
+                            } else {
+                                serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":if status == 403 { "Forbidden" } else { "ServiceUnavailable" },"message":"watch refused","code":status}).to_string()
+                            },
+                        )
+                    } else if lists.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (200, r#"{"kind":"PodList","apiVersion":"v1","metadata":{"resourceVersion":"1"},"items":[{"apiVersion":"v1","kind":"Pod","metadata":{"name":"one","resourceVersion":"1"}}]}"#.into())
                     } else {
-                        Poll::Ready(None)
-                    }
-                }));
-                Ok::<_, std::io::Error>(
-                    http::Response::builder()
-                        .status(code)
-                        .body(http_body_util::StreamBody::new(frames))
-                        .unwrap(),
-                )
+                        (200, r#"{"kind":"PodList","apiVersion":"v1","metadata":{"resourceVersion":"2"},"items":[{"apiVersion":"v1","kind":"Pod","metadata":{"name":"one","resourceVersion":"1"}},{"apiVersion":"v1","kind":"Pod","metadata":{"name":"two","resourceVersion":"2"}}]}"#.into())
+                    };
+                    let keep_open = watch && code == 200;
+                    let frames = futures_util::stream::iter([Ok::<_, std::io::Error>(
+                        hyper::body::Frame::data(hyper::body::Bytes::from(body)),
+                    )])
+                    .chain(futures_util::stream::poll_fn(move |_| {
+                        if keep_open {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(None)
+                        }
+                    }));
+                    Ok::<_, std::io::Error>(
+                        http::Response::builder()
+                            .status(code)
+                            .body(http_body_util::StreamBody::new(frames))
+                            .unwrap(),
+                    )
+                }
             }),
             "default",
         );
@@ -2502,6 +2514,8 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn probe_reports_polling_when_rbac_forbids_the_watch() {
+        // The fallback list has one more pod than the refused watch's list,
+        // so a count from the earlier list would show up as 1.
         let cluster = probe_cluster(false, 403, Duration::ZERO);
         let probe = cluster
             .probe_watch("pods", "default", Duration::from_secs(1))
@@ -2510,7 +2524,7 @@ pub(crate) mod tests {
             probe,
             WatchProbe::Ran {
                 synced: Some(_),
-                objects: 1,
+                objects: 2,
                 polling: true,
                 errors: 0,
                 last_error: None,

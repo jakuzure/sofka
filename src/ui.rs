@@ -757,6 +757,16 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(" sofka ", theme::title()),
         Span::styled(kind, Style::default().fg(theme::peach())),
         Span::styled(format!(" [{}]", app.store.len()), theme::dim()),
+    ];
+    // Beside the count, ahead of the namespace and context, so a long
+    // context cannot clip it off a narrow header.
+    if app.watch_polling {
+        spans.push(Span::styled(
+            format!("  {}", polling_label()),
+            Style::default().fg(theme::yellow()),
+        ));
+    }
+    spans.extend([
         Span::styled("  ns:", theme::dim()),
         Span::styled(ns, Style::default().fg(theme::green())),
         Span::styled("  ", theme::dim()),
@@ -764,13 +774,7 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
             diagnostic_value(app, &app.cluster.context).into_owned(),
             Style::default().fg(theme::mauve()),
         ),
-    ];
-    if app.watch_polling {
-        spans.push(Span::styled(
-            format!("  {}", polling_label()),
-            Style::default().fg(theme::yellow()),
-        ));
-    }
+    ]);
     if app.readonly {
         spans.push(Span::styled(" [ro]", Style::default().fg(theme::red())));
     }

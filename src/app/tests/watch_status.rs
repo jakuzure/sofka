@@ -191,6 +191,13 @@ async fn a_forbidden_watch_polls_the_view_and_says_so() {
     let screen = screen_text(&mut app, 140, 30);
     assert!(screen.contains("polling 2s (watch forbidden)"), "{screen}");
     assert!(screen.contains("● polling"), "{screen}");
+    app.cluster.context = "a-very-long-context-name-that-fills-a-narrow-header".into();
+    app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
+    assert!(app.compact);
+    let screen = screen_text(&mut app, 70, 30);
+    let header = screen.lines().next().unwrap();
+    assert!(header.contains("polling 2s (watch forbidden)"), "{header}");
+    app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
 
     type_resource_query(&mut app, "services");
     assert_eq!(app.kind_plural, "services");
