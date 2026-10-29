@@ -114,8 +114,15 @@ which Scoop enables by default:
 scoop install sofka
 ```
 
-`scoop update sofka` upgrades it. Scoop's update bot picks up new releases,
-so a new version can take a few hours to show up in Scoop.
+To upgrade, sync the buckets first, then update sofka:
+
+```powershell
+scoop update; scoop update sofka
+```
+
+Add `--global` to `scoop update sofka` for a global install. Scoop's update
+bot picks up new releases, so a new version can take a few hours to show up in
+Scoop.
 
 Without Scoop, extract the complete ZIP into a directory you own. Run `sofka.exe` from
 PowerShell or Windows Terminal. Add that directory to your user `PATH` if
