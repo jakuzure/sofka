@@ -349,6 +349,12 @@ pub enum Msg {
         generation: u64,
         list: Vec<String>,
     },
+    /// Each listed context's `[context_badge]`, resolved off-thread from its
+    /// override files after [`Msg::Contexts`].
+    ContextBadges {
+        generation: u64,
+        badges: std::collections::HashMap<String, crate::config::ContextBadge>,
+    },
     /// Result of an off-thread context switch (rebuilds client + discovery).
     ContextSwitched {
         generation: u64,

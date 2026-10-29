@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{self, Receiver};
 
 #[cfg(unix)]
 mod clipboard;
+mod context_badge;
 mod credentials;
 mod dir;
 mod exec_auth;

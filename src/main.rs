@@ -577,6 +577,12 @@ async fn run_main(args: Args) -> Result<()> {
         _ => None,
     };
     app.readonly = app.readonly_override.unwrap_or(cfg.readonly);
+    let (context_badge, badge_warnings) = cfg.context_badge.compile();
+    app.context_badge = context_badge;
+    for w in badge_warnings {
+        eprintln!("warning: {w}");
+        app.config_warnings.push(w);
+    }
     app.configure_native_describe(cfg.experimental.native_describe);
     let launch_namespace = args.launch_namespace();
     app.namespace = nsmem::resolve_namespace(
@@ -1077,7 +1083,8 @@ async fn run_info(
             .chain(config::workspace_warnings(&cfg.workspaces))
             .chain(config::guardrail_warnings(&cfg.guardrails))
             .chain(config::forward_warnings(&cfg.forwards))
-            .chain(config::notify_warnings(&cfg.notify)),
+            .chain(config::notify_warnings(&cfg.notify))
+            .chain(cfg.context_badge.compile().1),
     );
     lines.push(String::new());
     lines.extend(diagnostics::warning_lines(warnings));

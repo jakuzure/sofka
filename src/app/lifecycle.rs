@@ -2176,6 +2176,9 @@ impl App {
                     self.ctx_state.select(Some(idx));
                 }
             }
+            Msg::ContextBadges { generation, badges } if generation == self.generation => {
+                self.ctx_badges = badges;
+            }
             Msg::ContextRenamed {
                 generation,
                 claim,

@@ -2449,6 +2449,11 @@ pub struct App {
     /// Session-wide pin from `--readonly`/`--write`; wins over any config
     /// `readonly` value on every context switch. `None` = config decides.
     pub readonly_override: Option<bool>,
+    /// The active context's `[context_badge]`, shown in the header.
+    pub context_badge: Option<crate::config::ContextBadge>,
+    /// Badges for `:ctx` picker rows, keyed by context name. Resolved
+    /// off-thread after the context list arrives.
+    pub ctx_badges: HashMap<String, crate::config::ContextBadge>,
 
     /// Current images aligned with `container_list`, for the Set-Image picker.
     pub image_values: Vec<String>,
@@ -2886,6 +2891,8 @@ impl App {
             config_warnings: Vec::new(),
             readonly: false,
             readonly_override: None,
+            context_badge: None,
+            ctx_badges: HashMap::new(),
             image_values: Vec::new(),
             image_target: None,
             metrics: HashMap::new(),

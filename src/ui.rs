@@ -616,6 +616,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let mut context_line = field("Context:", app.cluster.context.clone(), theme::mauve());
+    if let Some(badge) = &app.context_badge {
+        context_line.push_span(Span::raw("  "));
+        context_line.push_span(context_badge_span(badge));
+    }
     if app.readonly {
         context_line.push_span(Span::styled(
             "  [read-only]",
@@ -691,6 +695,20 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// `[label]` in the badge's skin color (plain text without one), bold so it
+/// reads as a tag rather than part of the context name.
+fn context_badge_span(badge: &crate::config::ContextBadge) -> Span<'static> {
+    let color = badge
+        .color
+        .as_deref()
+        .and_then(theme::swatch)
+        .unwrap_or_else(theme::text);
+    Span::styled(
+        format!("[{}]", badge.label),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
 fn favorite_namespace_spans(app: &App, width: usize) -> Vec<Span<'static>> {
     let key_style = Style::default()
         .fg(theme::sky())
@@ -758,6 +776,10 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::mauve()),
         ),
     ];
+    if let Some(badge) = &app.context_badge {
+        spans.push(Span::raw(" "));
+        spans.push(context_badge_span(badge));
+    }
     if app.readonly {
         spans.push(Span::styled(" [ro]", Style::default().fg(theme::red())));
     }
@@ -3791,7 +3813,7 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "  "
             };
-            Text::from(Line::from(vec![
+            let mut line = Line::from(vec![
                 Span::styled(fleet, Style::default().fg(theme::mark())),
                 Span::styled(
                     format!("{marker}{c}"),
@@ -3801,7 +3823,12 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
                         theme::text()
                     }),
                 ),
-            ]))
+            ]);
+            if let Some(badge) = app.ctx_badges.get(c) {
+                line.push_span(Span::raw("  "));
+                line.push_span(context_badge_span(badge));
+            }
+            Text::from(line)
         })
         .collect();
     // While typing, show the filter buffer in the title so it reads like an

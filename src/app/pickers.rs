@@ -642,13 +642,17 @@ impl App {
         self.ctx_filter.clear();
         self.ctx_filtering = false;
         self.ctx_list.clear();
+        self.ctx_badges.clear();
         self.ctx_state.select(None);
         self.mode = Mode::Contexts;
         let tx = self.tx.clone();
         let genr = self.generation;
+        let config = self.config.clone();
         tokio::spawn(async move {
-            match Cluster::list_contexts() {
-                Ok(mut list) => {
+            match Cluster::list_context_clusters() {
+                Ok(contexts) => {
+                    let mut list: Vec<String> =
+                        contexts.iter().map(|(name, _)| name.clone()).collect();
                     list.sort();
                     let _ = tx
                         .send(Msg::Contexts {
@@ -656,6 +660,18 @@ impl App {
                             list,
                         })
                         .await;
+                    // The list shows first; badges need every context's
+                    // override files read, which waits for nothing on screen.
+                    if let Ok(badges) =
+                        tokio::task::spawn_blocking(move || config.context_badges(&contexts)).await
+                    {
+                        let _ = tx
+                            .send(Msg::ContextBadges {
+                                generation: genr,
+                                badges,
+                            })
+                            .await;
+                    }
                 }
                 // An unreadable kubeconfig must say so — an empty picker
                 // over a parse error looks like "you have no contexts".
@@ -1011,6 +1027,9 @@ impl App {
         self.timeline.clear();
         self.skin_colors = resolved.config.skin.colors;
         self.readonly = self.readonly_override.unwrap_or(resolved.config.readonly);
+        let (badge, badge_warnings) = resolved.config.context_badge.compile();
+        self.context_badge = badge;
+        plugin_warnings.extend(badge_warnings);
         self.configure_native_describe(resolved.config.experimental.native_describe);
         cluster.add_aliases(&self.user_aliases);
         self.bump_generation();

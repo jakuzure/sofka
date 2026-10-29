@@ -1082,6 +1082,22 @@ impl Cluster {
             .map_err(|e| format!("reading kubeconfig: {e}"))
     }
 
+    /// Kubeconfig contexts paired with their cluster names (empty when a
+    /// context names none), from one kubeconfig read.
+    pub fn list_context_clusters() -> Result<Vec<(String, String)>, String> {
+        Kubeconfig::read()
+            .map(|k| {
+                k.contexts
+                    .into_iter()
+                    .map(|c| {
+                        let cluster = c.context.map(|ctx| ctx.cluster).unwrap_or_default();
+                        (c.name, cluster)
+                    })
+                    .collect()
+            })
+            .map_err(|e| format!("reading kubeconfig: {e}"))
+    }
+
     /// The kubeconfig context served by `server`, if any.
     ///
     /// Argo CD records a destination as the API-server URL of the target
